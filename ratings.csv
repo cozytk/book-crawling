@@ -1,0 +1,4 @@
+﻿query,platform,rating,rating_scale,normalized_rating,review_count,book_title,url,crawled_at
+클린 코드,kyobo,9.8,10,9.8,117,Clean Code(클린 코드),https://product.kyobobook.co.kr/detail/S000001032980,2026-02-04T10:25:20.693176
+클린 코드,yes24,9.5,10,9.5,101,Clean Code 클린 코드,https://www.yes24.com/product/goods/11681152,2026-02-04T10:25:15.678297
+클린 코드,aladin,9.6,10,9.6,6,클린 코드 Clean Code,https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=34083680,2026-02-04T10:25:20.035352

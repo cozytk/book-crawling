@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:www.googleapis.com)",
+      "WebFetch(domain:openlibrary.org)",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "Bash(python review_crawler.py:*)",
+      "Bash(/Users/taekkim/.pyenv/versions/3.14.2/bin/pip install:*)",
+      "Bash(python -m pip install:*)",
+      "Bash(uv pip install:*)",
+      "Bash(source:*)",
+      "Bash(python:*)",
+      "Bash(/Users/taekkim/book/.venv/bin/pip install:*)",
+      "Bash(/Users/taekkim/book/.venv/bin/python:*)",
+      "Bash(.venv/bin/python -m pip install:*)",
+      "Bash(.venv/bin/python:*)",
+      "WebFetch(domain:blog.aladin.co.kr)",
+      "WebFetch(domain:developers.google.com)",
+      "WebFetch(domain:velog.io)",
+      "WebFetch(domain:docs.google.com)",
+      "WebFetch(domain:developers.kakao.com)",
+      "Bash(uv run python:*)"
+    ]
+  }
+}
