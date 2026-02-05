@@ -97,7 +97,7 @@ class LibraryThingCrawler(BaseHttpCrawler):
     def _search_via_search_page(self, keyword: str) -> tuple[str | None, str]:
         """검색 페이지를 통한 검색 및 폴백"""
         encoded = urllib.parse.quote(keyword)
-        search_url = f"{self.base_url}/search?search={encoded}&searchtype=newwork_titles&sortchoice=0"
+        search_url = f"{self.base_url}/search.php?search={encoded}&searchtype=newwork_titles&sortchoice=0"
         
         html = self._fetch_search_results(search_url)
         link = self._find_link_in_html(html)
@@ -108,7 +108,7 @@ class LibraryThingCrawler(BaseHttpCrawler):
             if primary != keyword:
                 self.logger.debug(f"주제목으로 재시도: {primary}")
                 encoded_primary = urllib.parse.quote(primary)
-                search_url = f"{self.base_url}/search?search={encoded_primary}&searchtype=newwork_titles&sortchoice=0"
+                search_url = f"{self.base_url}/search.php?search={encoded_primary}&searchtype=newwork_titles&sortchoice=0"
                 html = self._fetch_search_results(search_url)
                 link = self._find_link_in_html(html)
 
