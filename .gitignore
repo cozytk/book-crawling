@@ -1,6 +1,12 @@
 .env
+.env*.local
 .venv
 __pycache__
 .pytest_cache
 .claude
 .archive
+
+# Next.js
+web/node_modules/
+web/.next/
+web/out/
