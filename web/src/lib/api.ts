@@ -59,18 +59,40 @@ export async function getPlatforms(): Promise<PlatformInfo[]> {
   return data.platforms;
 }
 
+/** 캐시 확인 API */
+export interface CacheCheckResult {
+  cached: boolean;
+  search?: SearchResult["search"];
+}
+
+export async function checkCache(query: string): Promise<CacheCheckResult> {
+  const res = await fetch(
+    `${API_URL}/api/search/check?query=${encodeURIComponent(query)}`
+  );
+  if (!res.ok) {
+    return { cached: false };
+  }
+  return res.json();
+}
+
 /** SSE 스트리밍 검색 - 결과를 하나씩 콜백으로 전달 */
 export async function searchBookStream(
   query: string,
   onResult: (rating: PlatformRating) => void,
   onDone: (summary: SearchResult["search"], source: string) => void,
   onError: (error: string) => void,
-  platforms?: string[]
+  onDescription?: (description: string) => void,
+  platforms?: string[],
+  forceRefresh?: boolean
 ): Promise<void> {
   const res = await fetch(`${API_URL}/api/search/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, platforms: platforms || null }),
+    body: JSON.stringify({
+      query,
+      platforms: platforms || null,
+      force_refresh: forceRefresh || false,
+    }),
   });
 
   if (!res.ok) {
@@ -102,6 +124,8 @@ export async function searchBookStream(
           const parsed = JSON.parse(data);
           if (eventType === "done") {
             onDone(parsed.search, parsed.source);
+          } else if (eventType === "description") {
+            onDescription?.(parsed.description);
           } else {
             onResult(parsed as PlatformRating);
           }

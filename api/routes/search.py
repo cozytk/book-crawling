@@ -1,5 +1,6 @@
 """검색 API 라우트"""
 
+import asyncio
 import json
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -16,6 +17,7 @@ class SearchRequest(BaseModel):
     query: str
     platforms: list[str] | None = None
     include_description: bool = False
+    force_refresh: bool = False
 
 
 class PlatformInfo(BaseModel):
@@ -133,6 +135,28 @@ async def get_search(search_id: str):
     }
 
 
+@router.get("/search/check")
+async def check_cache(query: str):
+    """
+    캐시 확인 API
+
+    캐시된 검색 결과가 있는지만 확인.
+    있으면 {"cached": true, "search": {...}}, 없으면 {"cached": false}
+    """
+    if not query.strip():
+        raise HTTPException(status_code=400, detail="검색어를 입력해주세요")
+
+    try:
+        client = get_client()
+        cached = find_cached_search(client, query.strip())
+        if cached:
+            return {"cached": True, "search": cached["search"]}
+    except Exception:
+        pass
+
+    return {"cached": False}
+
+
 @router.post("/search/stream")
 async def search_book_stream(req: SearchRequest):
     """
@@ -146,28 +170,44 @@ async def search_book_stream(req: SearchRequest):
 
     query = req.query.strip()
 
-    # 캐시 확인
+    # 캐시 확인 (force_refresh가 아닌 경우만)
+    cached = None
     try:
         client = get_client()
-        cached = find_cached_search(client, query)
+        if not req.force_refresh:
+            cached = find_cached_search(client, query)
         if cached:
-            # 캐시 히트: 각 결과를 개별 이벤트로 전송 후 done
+            # 캐시 히트: description을 병렬로 생성하고 각 결과를 개별 이벤트로 전송
             async def cached_stream():
+                # description 생성을 먼저 시작 (결과 전송과 병렬)
+                desc_task = asyncio.create_task(generate_book_description(query))
+                desc_sent = False
+
                 for r in cached["ratings"]:
+                    # 결과 나오기 전에 description이 완료되었는지 확인
+                    if not desc_sent and desc_task.done():
+                        try:
+                            desc = desc_task.result()
+                            if desc:
+                                yield f"event: description\ndata: {json.dumps({'description': desc}, ensure_ascii=False)}\n\n"
+                        except Exception:
+                            pass
+                        desc_sent = True
+
                     yield f"data: {json.dumps(r, ensure_ascii=False)}\n\n"
 
-                # AI 설명 생성 (옵션)
-                description = None
-                if req.include_description and cached["ratings"]:
-                    first_result = cached["ratings"][0]
-                    book_title = first_result.get("book_title", query)
-                    author = first_result.get("author")
-                    description = await generate_book_description(book_title, author)
+                # 결과 전송 끝났는데 description이 아직 안 왔으면 기다림
+                if not desc_sent:
+                    try:
+                        desc = await desc_task
+                        if desc:
+                            yield f"event: description\ndata: {json.dumps({'description': desc}, ensure_ascii=False)}\n\n"
+                    except Exception:
+                        pass
 
                 summary = {
                     'source': 'cache',
                     'search': cached['search'],
-                    'description': description
                 }
                 yield f"event: done\ndata: {json.dumps(summary, ensure_ascii=False)}\n\n"
             return StreamingResponse(cached_stream(), media_type="text/event-stream")
@@ -177,10 +217,33 @@ async def search_book_stream(req: SearchRequest):
     async def event_stream():
         from api.services.crawler_service import crawl_all_stream
 
+        # description 생성을 먼저 시작 (크롤링과 병렬)
+        desc_task = asyncio.create_task(generate_book_description(query))
+        desc_sent = False
+
         results = []
         async for result in crawl_all_stream(query, req.platforms):
+            # 크롤링 결과 나오기 전에 description이 완료되었는지 확인
+            if not desc_sent and desc_task.done():
+                try:
+                    desc = desc_task.result()
+                    if desc:
+                        yield f"event: description\ndata: {json.dumps({'description': desc}, ensure_ascii=False)}\n\n"
+                except Exception:
+                    pass
+                desc_sent = True
+
             results.append(result)
             yield f"data: {json.dumps(result, ensure_ascii=False)}\n\n"
+
+        # 크롤링 끝났는데 description이 아직 안 왔으면 기다림
+        if not desc_sent:
+            try:
+                desc = await desc_task
+                if desc:
+                    yield f"event: description\ndata: {json.dumps({'description': desc}, ensure_ascii=False)}\n\n"
+            except Exception:
+                pass
 
         # DB에 저장
         search_record = None
@@ -189,14 +252,6 @@ async def search_book_stream(req: SearchRequest):
                 search_record = save_search_result(client, query, results)
             except Exception:
                 pass
-
-        # AI 설명 생성 (옵션)
-        description = None
-        if req.include_description and results:
-            first_result = results[0]
-            book_title = first_result.get("book_title", query)
-            author = first_result.get("author")
-            description = await generate_book_description(book_title, author)
 
         # 요약 계산
         ratings = [r["normalized_rating"] for r in results if r.get("normalized_rating")]
@@ -212,7 +267,6 @@ async def search_book_stream(req: SearchRequest):
                 "total_reviews": total_reviews,
                 "platform_count": len(results),
             },
-            "description": description,
         }
         yield f"event: done\ndata: {json.dumps(summary, ensure_ascii=False)}\n\n"
 
