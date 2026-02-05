@@ -13,23 +13,20 @@ class Yes24Crawler(BaseHttpCrawler):
     base_url = "https://www.yes24.com"
     rating_scale = 10
 
-    async def search_book(self, query: str) -> tuple[str | None, str]:
+    def search_by_keyword(self, keyword: str) -> tuple[str | None, str]:
         """책 검색 후 가장 관련 있는 결과의 상세 페이지 URL 반환"""
-        encoded_query = urllib.parse.quote(query)
+        encoded_query = urllib.parse.quote(keyword)
         search_url = f"https://www.yes24.com/Product/Search?domain=ALL&query={encoded_query}"
-
-        print(f"[{self.name}] 검색 중: {query}")
 
         try:
             html = self._fetch_html(search_url)
-        except Exception as e:
-            print(f"[{self.name}] 검색 페이지 로드 실패: {e}")
+        except Exception:
             return None, ""
 
         soup = BeautifulSoup(html, "html.parser")
 
         # a.gd_name 클래스로 검색 결과 링크 찾기
-        query_lower = query.lower()
+        keyword_lower = keyword.lower()
         best_url = None
         best_title = ""
 
@@ -51,7 +48,7 @@ class Yes24Crawler(BaseHttpCrawler):
                 best_title = text
 
             # 검색어가 제목에 포함된 경우 우선
-            if query_lower in text.lower():
+            if keyword_lower in text.lower():
                 best_url = href
                 best_title = text
                 break
@@ -63,15 +60,14 @@ class Yes24Crawler(BaseHttpCrawler):
         if best_url.startswith("/"):
             best_url = f"https://www.yes24.com{best_url}"
 
-        print(f"[{self.name}] 찾은 책: {best_title}")
         return best_url, best_title
 
     async def get_rating(self, url: str) -> tuple[float | None, int]:
         """상세 페이지에서 평점/리뷰수 추출"""
         try:
             html = self._fetch_html(url)
-        except Exception as e:
-            print(f"[{self.name}] 상품 페이지 로드 실패: {e}")
+        except Exception:
+            self.logger.rating_complete(None, 0, method="html")
             return None, 0
 
         soup = BeautifulSoup(html, "html.parser")
@@ -90,6 +86,7 @@ class Yes24Crawler(BaseHttpCrawler):
                 rating_text = rating_elem.get_text(strip=True)
                 try:
                     rating = float(rating_text)
+                    self.logger.parse_result(selector, rating)
                     break
                 except ValueError:
                     continue
@@ -108,6 +105,8 @@ class Yes24Crawler(BaseHttpCrawler):
             match = re.search(pattern, text)
             if match:
                 review_count = int(match.group(1).replace(",", ""))
+                self.logger.parse_result(pattern, review_count)
                 break
 
+        self.logger.rating_complete(rating, review_count, method="html")
         return rating, review_count

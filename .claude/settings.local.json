@@ -20,7 +20,25 @@
       "WebFetch(domain:velog.io)",
       "WebFetch(domain:docs.google.com)",
       "WebFetch(domain:developers.kakao.com)",
-      "Bash(uv run python:*)"
+      "Bash(uv run python:*)",
+      "WebFetch(domain:search.kyobobook.co.kr)",
+      "WebFetch(domain:product.kyobobook.co.kr)",
+      "WebFetch(domain:www.google.com)",
+      "WebFetch(domain:www.goodreads.com)",
+      "WebFetch(domain:crawlbase.com)",
+      "WebFetch(domain:docs.aladin.co.kr)",
+      "Bash(pip3 install:*)",
+      "Bash(pytest:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run pytest:*)",
+      "WebFetch(domain:www.amazon.com)",
+      "Bash(uv add:*)",
+      "Bash(__NEW_LINE_5b5bc003d4486811__ echo -e \"\\\\n=== review/status-count ===\")",
+      "Bash(uv run pyright:*)",
+      "WebFetch(domain:pedia.watcha.com)",
+      "WebFetch(domain:www.librarything.com)",
+      "Bash(ls:*)",
+      "Bash(xargs basename:*)"
     ]
   }
 }

@@ -1,0 +1,19 @@
+{
+    "version": "20131101",
+    "title": "알라딘 상품조회",
+    "item": [
+        {
+            "itemId": 123456789,
+            "title": "클린 코드 Clean Code - 애자일 소프트웨어 장인 정신",
+            "link": "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=123456789",
+            "subInfo": {
+                "ratingInfo": {
+                    "ratingScore": 9.6,
+                    "ratingCount": 234,
+                    "commentReviewCount": 100
+                },
+                "originalTitle": "Clean Code: A Handbook Of Agile Software Craftsmanship"
+            }
+        }
+    ]
+}

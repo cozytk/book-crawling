@@ -1,0 +1,15 @@
+{
+    "version": "20131101",
+    "title": "알라딘 검색결과",
+    "totalResults": 1,
+    "item": [
+        {
+            "itemId": 123456789,
+            "title": "클린 코드 Clean Code - 애자일 소프트웨어 장인 정신",
+            "link": "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=123456789",
+            "author": "로버트 C. 마틴",
+            "pubDate": "2013-12-24",
+            "customerReviewRank": 9.6
+        }
+    ]
+}
