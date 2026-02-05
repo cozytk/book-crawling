@@ -124,8 +124,8 @@ export async function searchBookStream(
           const parsed = JSON.parse(data);
           if (eventType === "done") {
             onDone(parsed.search, parsed.source);
-          } else if (eventType === "description") {
-            onDescription?.(parsed.description);
+          } else if (eventType === "description_chunk") {
+            onDescription?.(parsed.chunk);
           } else {
             onResult(parsed as PlatformRating);
           }

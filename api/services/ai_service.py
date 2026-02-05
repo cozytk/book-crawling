@@ -1,7 +1,7 @@
 """AI service for generating book descriptions using Brave Search and Gemini."""
 import os
 import logging
-from typing import Optional
+from typing import Optional, AsyncGenerator
 import httpx
 from google import genai
 
@@ -13,6 +13,39 @@ BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY")
 
 if GEMINI_API_KEY:
     client = genai.Client(api_key=GEMINI_API_KEY)
+
+
+async def generate_book_description_stream(
+    book_title: str, author: Optional[str] = None
+) -> AsyncGenerator[str, None]:
+    """
+    Generate a book description using Brave Search and Gemini Flash 3 with streaming.
+
+    Args:
+        book_title: The title of the book
+        author: Optional author name
+
+    Yields:
+        Text chunks from the Gemini response
+    """
+    try:
+        # Step 1: Search using Brave Search API
+        search_query = f"{book_title}"
+        if author:
+            search_query += f" {author}"
+
+        search_results = await _brave_search(search_query)
+        if not search_results:
+            logger.warning(f"No search results found for: {search_query}")
+            return
+
+        # Step 2: Stream description using Gemini
+        async for chunk in _generate_with_gemini_stream(book_title, search_results):
+            yield chunk
+
+    except Exception as e:
+        logger.error(f"Error generating book description stream: {e}", exc_info=True)
+        return
 
 
 async def generate_book_description(
@@ -100,6 +133,49 @@ async def _brave_search(query: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"Unexpected error during search: {e}")
         return None
+
+
+async def _generate_with_gemini_stream(book_title: str, search_results: str) -> AsyncGenerator[str, None]:
+    """
+    Generate book description using Gemini Flash 3 with streaming.
+
+    Args:
+        book_title: The title of the book
+        search_results: Formatted search results
+
+    Yields:
+        Text chunks from the Gemini response
+    """
+    if not GEMINI_API_KEY:
+        logger.error("GEMINI_API_KEY not configured")
+        return
+
+    try:
+        prompt = f"""다음은 '{book_title}'에 대한 웹 검색 결과입니다. 이 책과 작가에 대해 자세히 소개해주세요.
+
+검색 결과:
+{search_results}
+
+다음 내용을 포함하여 상세히 소개해주세요:
+1. 작가 소개 (국적, 대표작, 특징 등)
+2. 책의 주요 내용과 주제
+3. 책의 특징과 의의
+4. 독자 반응이나 평가 (있다면)
+
+상세한 소개:"""
+
+        response = await client.aio.models.generate_content_stream(
+            model="gemini-3-flash-preview",
+            contents=prompt
+        )
+
+        async for chunk in response:
+            if chunk.text:
+                yield chunk.text
+
+    except Exception as e:
+        logger.error(f"Gemini API streaming error: {e}")
+        return
 
 
 async def _generate_with_gemini(book_title: str, search_results: str) -> Optional[str]:

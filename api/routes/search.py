@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from api.db import get_client, find_cached_search, save_search_result, get_all_searches
 from api.services.crawler_service import crawl_all, get_available_platforms
-from api.services.ai_service import generate_book_description
+from api.services.ai_service import generate_book_description, generate_book_description_stream
 
 router = APIRouter()
 
@@ -179,31 +179,50 @@ async def search_book_stream(req: SearchRequest):
         if cached:
             # 캐시 히트: description을 병렬로 생성하고 각 결과를 개별 이벤트로 전송
             async def cached_stream():
-                # description 생성을 먼저 시작 (결과 전송과 병렬)
-                desc_task = asyncio.create_task(generate_book_description(query))
-                desc_sent = False
+                # description 청크를 큐로 수집
+                desc_queue = asyncio.Queue()
+
+                async def stream_description():
+                    try:
+                        async for chunk in generate_book_description_stream(query):
+                            await desc_queue.put(("desc_chunk", chunk))
+                    except Exception:
+                        pass
+                    await desc_queue.put(("desc_done", None))
+
+                desc_task = asyncio.create_task(stream_description())
 
                 for r in cached["ratings"]:
-                    # 결과 나오기 전에 description이 완료되었는지 확인
-                    if not desc_sent and desc_task.done():
+                    # 결과 나오기 전에 description 청크가 있으면 전송
+                    while not desc_queue.empty():
                         try:
-                            desc = desc_task.result()
-                            if desc:
-                                yield f"event: description\ndata: {json.dumps({'description': desc}, ensure_ascii=False)}\n\n"
-                        except Exception:
-                            pass
-                        desc_sent = True
+                            event_type, data = desc_queue.get_nowait()
+                            if event_type == "desc_chunk":
+                                yield f"event: description_chunk\ndata: {json.dumps({'chunk': data}, ensure_ascii=False)}\n\n"
+                            elif event_type == "desc_done":
+                                break
+                        except asyncio.QueueEmpty:
+                            break
 
                     yield f"data: {json.dumps(r, ensure_ascii=False)}\n\n"
 
-                # 결과 전송 끝났는데 description이 아직 안 왔으면 기다림
-                if not desc_sent:
-                    try:
-                        desc = await desc_task
-                        if desc:
-                            yield f"event: description\ndata: {json.dumps({'description': desc}, ensure_ascii=False)}\n\n"
-                    except Exception:
-                        pass
+                # 결과 전송 끝났는데 description이 아직 안 끝났으면 대기
+                if not desc_task.done():
+                    while True:
+                        event_type, data = await desc_queue.get()
+                        if event_type == "desc_chunk":
+                            yield f"event: description_chunk\ndata: {json.dumps({'chunk': data}, ensure_ascii=False)}\n\n"
+                        elif event_type == "desc_done":
+                            break
+                else:
+                    # Task 완료, 큐만 비우기
+                    while not desc_queue.empty():
+                        try:
+                            event_type, data = desc_queue.get_nowait()
+                            if event_type == "desc_chunk":
+                                yield f"event: description_chunk\ndata: {json.dumps({'chunk': data}, ensure_ascii=False)}\n\n"
+                        except asyncio.QueueEmpty:
+                            break
 
                 summary = {
                     'source': 'cache',
@@ -217,33 +236,52 @@ async def search_book_stream(req: SearchRequest):
     async def event_stream():
         from api.services.crawler_service import crawl_all_stream
 
-        # description 생성을 먼저 시작 (크롤링과 병렬)
-        desc_task = asyncio.create_task(generate_book_description(query))
-        desc_sent = False
+        # description 청크를 큐로 수집
+        desc_queue = asyncio.Queue()
+
+        async def stream_description():
+            try:
+                async for chunk in generate_book_description_stream(query):
+                    await desc_queue.put(("desc_chunk", chunk))
+            except Exception:
+                pass
+            await desc_queue.put(("desc_done", None))
+
+        desc_task = asyncio.create_task(stream_description())
 
         results = []
         async for result in crawl_all_stream(query, req.platforms):
-            # 크롤링 결과 나오기 전에 description이 완료되었는지 확인
-            if not desc_sent and desc_task.done():
+            # 크롤링 결과 나오기 전에 description 청크가 있으면 전송
+            while not desc_queue.empty():
                 try:
-                    desc = desc_task.result()
-                    if desc:
-                        yield f"event: description\ndata: {json.dumps({'description': desc}, ensure_ascii=False)}\n\n"
-                except Exception:
-                    pass
-                desc_sent = True
+                    event_type, data = desc_queue.get_nowait()
+                    if event_type == "desc_chunk":
+                        yield f"event: description_chunk\ndata: {json.dumps({'chunk': data}, ensure_ascii=False)}\n\n"
+                    elif event_type == "desc_done":
+                        break
+                except asyncio.QueueEmpty:
+                    break
 
             results.append(result)
             yield f"data: {json.dumps(result, ensure_ascii=False)}\n\n"
 
-        # 크롤링 끝났는데 description이 아직 안 왔으면 기다림
-        if not desc_sent:
-            try:
-                desc = await desc_task
-                if desc:
-                    yield f"event: description\ndata: {json.dumps({'description': desc}, ensure_ascii=False)}\n\n"
-            except Exception:
-                pass
+        # 크롤링 끝났는데 description이 아직 안 끝났으면 대기
+        if not desc_task.done():
+            while True:
+                event_type, data = await desc_queue.get()
+                if event_type == "desc_chunk":
+                    yield f"event: description_chunk\ndata: {json.dumps({'chunk': data}, ensure_ascii=False)}\n\n"
+                elif event_type == "desc_done":
+                    break
+        else:
+            # Task 완료, 큐만 비우기
+            while not desc_queue.empty():
+                try:
+                    event_type, data = desc_queue.get_nowait()
+                    if event_type == "desc_chunk":
+                        yield f"event: description_chunk\ndata: {json.dumps({'chunk': data}, ensure_ascii=False)}\n\n"
+                except asyncio.QueueEmpty:
+                    break
 
         # DB에 저장
         search_record = None

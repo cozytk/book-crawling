@@ -108,8 +108,8 @@ export default function Home() {
             setError(err);
             setIsLoading(false);
           },
-          (desc) => {
-            setDescription(desc);
+          (chunk) => {
+            setDescription((prev) => (prev || "") + chunk);
           },
           platforms,
           forceRefresh
@@ -285,11 +285,11 @@ export default function Home() {
 
       {/* 책 소개 (AI 생성) */}
       {description && (
-        <div className="bg-blue-50 border border-blue-100 rounded-xl p-6">
-          <h3 className="text-sm font-semibold text-blue-800 mb-2">
-            📖 책 소개
+        <div className="bg-gradient-to-br from-slate-50 to-blue-50 border border-slate-200 rounded-2xl p-8 shadow-sm">
+          <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">
+            책 소개
           </h3>
-          <div className="text-gray-700 leading-relaxed [&_h1]:text-xl [&_h1]:font-bold [&_h1]:mb-2 [&_h2]:text-lg [&_h2]:font-semibold [&_h2]:mb-2 [&_h3]:text-base [&_h3]:font-semibold [&_h3]:mb-1 [&_p]:mb-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:mb-2 [&_li]:mb-1 [&_strong]:font-semibold [&_em]:italic [&_a]:text-blue-600 [&_a]:underline [&_blockquote]:border-l-4 [&_blockquote]:border-blue-200 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-gray-600">
+          <div className="prose prose-slate max-w-none text-[15px] leading-[1.8] [&_h1]:text-xl [&_h1]:font-bold [&_h1]:mt-6 [&_h1]:mb-3 [&_h2]:text-lg [&_h2]:font-semibold [&_h2]:mt-5 [&_h2]:mb-2 [&_h3]:text-base [&_h3]:font-semibold [&_h3]:mt-4 [&_h3]:mb-2 [&_p]:mb-3 [&_p]:text-slate-700 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:mb-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:mb-3 [&_li]:mb-1.5 [&_li]:text-slate-700 [&_strong]:font-semibold [&_strong]:text-slate-900 [&_em]:italic [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:border-l-4 [&_blockquote]:border-slate-300 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-slate-500 [&_blockquote]:my-4 [&_hr]:my-6 [&_hr]:border-slate-200">
             <ReactMarkdown>{description}</ReactMarkdown>
           </div>
         </div>
@@ -297,12 +297,14 @@ export default function Home() {
 
       {/* 소개 로딩 중 (검색 시작했지만 description 아직 없을 때) */}
       {isLoading && !description && (
-        <div className="bg-blue-50 border border-blue-100 rounded-xl p-6 animate-pulse">
-          <div className="h-4 bg-blue-200 rounded w-24 mb-3"></div>
-          <div className="space-y-2">
-            <div className="h-3 bg-blue-100 rounded w-full"></div>
-            <div className="h-3 bg-blue-100 rounded w-5/6"></div>
-            <div className="h-3 bg-blue-100 rounded w-4/6"></div>
+        <div className="bg-gradient-to-br from-slate-50 to-blue-50 border border-slate-200 rounded-2xl p-8 shadow-sm animate-pulse">
+          <div className="h-3 bg-slate-200 rounded w-16 mb-5"></div>
+          <div className="space-y-3">
+            <div className="h-3.5 bg-slate-100 rounded w-full"></div>
+            <div className="h-3.5 bg-slate-100 rounded w-11/12"></div>
+            <div className="h-3.5 bg-slate-100 rounded w-5/6"></div>
+            <div className="h-3.5 bg-slate-100 rounded w-full"></div>
+            <div className="h-3.5 bg-slate-100 rounded w-4/6"></div>
           </div>
         </div>
       )}
