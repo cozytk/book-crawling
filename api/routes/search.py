@@ -141,6 +141,7 @@ async def search_book_stream(req: SearchRequest):
 
     async def event_stream():
         from api.services.crawler_service import crawl_all_stream
+
         results = []
         async for result in crawl_all_stream(query, req.platforms):
             results.append(result)

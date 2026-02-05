@@ -147,37 +147,48 @@ async def crawl_all_stream(
     if has_foreign:
         foreign = await resolve_foreign_query(query)
 
-    # 태스크 생성 (platform name -> task mapping)
-    tasks = {}
+    # 태스크 생성
+    pending = set()
     for p in valid_platforms:
         if p in FOREIGN_PLATFORMS:
             if foreign.isbn:
-                task = asyncio.ensure_future(crawl_platform(
+                task = asyncio.create_task(crawl_platform(
                     CRAWLERS[p], foreign.isbn, foreign.query,
                     original_query=query, execution_id=execution_id
                 ))
-                tasks[task] = p
+                pending.add(task)
             elif foreign.query:
-                task = asyncio.ensure_future(crawl_platform(
+                task = asyncio.create_task(crawl_platform(
                     CRAWLERS[p], foreign.query,
                     original_query=query, execution_id=execution_id
                 ))
-                tasks[task] = p
+                pending.add(task)
         else:
-            task = asyncio.ensure_future(crawl_platform(
+            task = asyncio.create_task(crawl_platform(
                 CRAWLERS[p], query,
                 original_query=query, execution_id=execution_id
             ))
-            tasks[task] = p
+            pending.add(task)
 
-    # 결과를 하나씩 yield
-    for coro in asyncio.as_completed(list(tasks.keys())):
-        try:
-            result = await coro
-            if result is not None:
-                yield result.to_dict()
-        except Exception as e:
-            logger.error("crawl_failed", str(e))
+    # 완료되는 순서대로 yield
+    while pending:
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            try:
+                result = task.result()
+                if result is not None:
+                    yield {
+                        "platform": result.platform,
+                        "rating": result.rating,
+                        "rating_scale": result.rating_scale,
+                        "normalized_rating": result.normalized_rating,
+                        "review_count": result.review_count,
+                        "book_title": result.book_title,
+                        "url": result.url,
+                        "crawled_at": result.crawled_at.isoformat(),
+                    }
+            except Exception as e:
+                logger.error("crawl_failed", str(e))
 
 
 def get_available_platforms() -> list[dict]:
