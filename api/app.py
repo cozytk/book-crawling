@@ -12,7 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from crawler_logging import CrawlerLogger
 
 # 로깅 설정 (콘솔 출력, OpenObserve 비활성화)
-CrawlerLogger.configure(level="INFO", console=True, openobserve=False)
+CrawlerLogger.configure(
+    level=os.environ.get("LOG_LEVEL", "DEBUG"),
+    console=True,
+    openobserve=False,
+)
 
 app = FastAPI(
     title="Book Crawler API",
