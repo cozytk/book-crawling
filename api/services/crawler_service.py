@@ -122,6 +122,64 @@ async def crawl_all(
     return search_result
 
 
+async def crawl_all_stream(
+    query: str, platforms: list[str] | None = None
+):
+    """
+    여러 플랫폼에서 병렬 크롤링 - 결과를 하나씩 yield
+
+    Yields:
+        dict: 각 플랫폼 결과 (PlatformRating.to_dict() 형태)
+    """
+    execution_id = uuid.uuid4().hex[:8]
+    logger.set_execution_id(execution_id)
+
+    if platforms is None:
+        platforms = list(CRAWLERS.keys())
+
+    valid_platforms = [p for p in platforms if p in CRAWLERS]
+    if not valid_platforms:
+        return
+
+    # 해외 플랫폼 검색어 해석
+    foreign = ForeignQuery()
+    has_foreign = any(p in FOREIGN_PLATFORMS for p in valid_platforms)
+    if has_foreign:
+        foreign = await resolve_foreign_query(query)
+
+    # 태스크 생성 (platform name -> task mapping)
+    tasks = {}
+    for p in valid_platforms:
+        if p in FOREIGN_PLATFORMS:
+            if foreign.isbn:
+                task = asyncio.ensure_future(crawl_platform(
+                    CRAWLERS[p], foreign.isbn, foreign.query,
+                    original_query=query, execution_id=execution_id
+                ))
+                tasks[task] = p
+            elif foreign.query:
+                task = asyncio.ensure_future(crawl_platform(
+                    CRAWLERS[p], foreign.query,
+                    original_query=query, execution_id=execution_id
+                ))
+                tasks[task] = p
+        else:
+            task = asyncio.ensure_future(crawl_platform(
+                CRAWLERS[p], query,
+                original_query=query, execution_id=execution_id
+            ))
+            tasks[task] = p
+
+    # 결과를 하나씩 yield
+    for coro in asyncio.as_completed(list(tasks.keys())):
+        try:
+            result = await coro
+            if result is not None:
+                yield result.to_dict()
+        except Exception as e:
+            logger.error("crawl_failed", str(e))
+
+
 def get_available_platforms() -> list[dict]:
     """사용 가능한 플랫폼 목록"""
     return [

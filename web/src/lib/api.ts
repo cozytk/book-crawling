@@ -59,6 +59,96 @@ export async function getPlatforms(): Promise<PlatformInfo[]> {
   return data.platforms;
 }
 
+/** SSE 스트리밍 검색 - 결과를 하나씩 콜백으로 전달 */
+export async function searchBookStream(
+  query: string,
+  onResult: (rating: PlatformRating) => void,
+  onDone: (summary: SearchResult["search"], source: string) => void,
+  onError: (error: string) => void,
+  platforms?: string[]
+): Promise<void> {
+  const res = await fetch(`${API_URL}/api/search/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, platforms: platforms || null }),
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: "서버 오류" }));
+    throw new Error(error.detail || `HTTP ${res.status}`);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("ReadableStream not supported");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    let eventType = "message";
+    for (const line of lines) {
+      if (line.startsWith("event: ")) {
+        eventType = line.slice(7).trim();
+      } else if (line.startsWith("data: ")) {
+        const data = line.slice(6);
+        try {
+          const parsed = JSON.parse(data);
+          if (eventType === "done") {
+            onDone(parsed.search, parsed.source);
+          } else {
+            onResult(parsed as PlatformRating);
+          }
+        } catch {
+          // skip invalid JSON
+        }
+        eventType = "message";
+      }
+    }
+  }
+}
+
+/** 검색 히스토리 조회 */
+export interface SearchHistoryItem {
+  id: string;
+  query: string;
+  avg_rating: number | null;
+  total_reviews: number;
+  platform_count: number;
+  created_at: string;
+  ratings: PlatformRating[];
+}
+
+export interface SearchHistoryResponse {
+  searches: SearchHistoryItem[];
+  total: number;
+}
+
+export async function getSearchHistory(params?: {
+  sort_by?: string;
+  order?: string;
+  limit?: number;
+  offset?: number;
+  platform?: string;
+}): Promise<SearchHistoryResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.sort_by) searchParams.set("sort_by", params.sort_by);
+  if (params?.order) searchParams.set("order", params.order);
+  if (params?.limit) searchParams.set("limit", String(params.limit));
+  if (params?.offset) searchParams.set("offset", String(params.offset));
+  if (params?.platform) searchParams.set("platform", params.platform);
+
+  const res = await fetch(`${API_URL}/api/searches?${searchParams}`);
+  if (!res.ok) throw new Error("검색 히스토리를 가져올 수 없습니다");
+  return res.json();
+}
+
 /** 플랫폼별 표시 정보 */
 export const PLATFORM_META: Record<
   string,

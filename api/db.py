@@ -96,3 +96,73 @@ def save_search_result(client: Client, query: str, results: list[dict]) -> dict:
         client.table("platform_ratings").insert(rows).execute()
 
     return search.data[0]
+
+
+def get_all_searches(
+    client: Client,
+    sort_by: str = "created_at",
+    order: str = "desc",
+    limit: int = 50,
+    offset: int = 0,
+    platform: str | None = None,
+) -> dict:
+    """
+    검색 히스토리 조회
+
+    Returns:
+        {"searches": [...], "total": int}
+    """
+    # 허용된 정렬 필드
+    allowed_sort = {"created_at", "avg_rating", "total_reviews", "platform_count"}
+    if sort_by not in allowed_sort:
+        sort_by = "created_at"
+
+    is_desc = order.lower() == "desc"
+
+    # 검색 목록 조회
+    query = (
+        client.table("searches")
+        .select("*", count="exact")
+        .order(sort_by, desc=is_desc)
+        .range(offset, offset + limit - 1)
+    )
+    result = query.execute()
+
+    searches = result.data
+    total = result.count or len(searches)
+
+    # 각 검색에 대한 플랫폼 결과도 포함
+    search_ids = [s["id"] for s in searches]
+    ratings_data = []
+    if search_ids:
+        ratings_result = (
+            client.table("platform_ratings")
+            .select("*")
+            .in_("search_id", search_ids)
+            .execute()
+        )
+        ratings_data = ratings_result.data
+
+    # search_id별로 그룹핑
+    ratings_by_search = {}
+    for r in ratings_data:
+        sid = r["search_id"]
+        if sid not in ratings_by_search:
+            ratings_by_search[sid] = []
+        ratings_by_search[sid].append(r)
+
+    # 플랫폼 필터 적용
+    if platform:
+        filtered_searches = []
+        for s in searches:
+            s_ratings = ratings_by_search.get(s["id"], [])
+            has_platform = any(r["platform"] == platform for r in s_ratings)
+            if has_platform:
+                filtered_searches.append(s)
+        searches = filtered_searches
+
+    # 각 검색에 ratings 첨부
+    for s in searches:
+        s["ratings"] = ratings_by_search.get(s["id"], [])
+
+    return {"searches": searches, "total": total}
