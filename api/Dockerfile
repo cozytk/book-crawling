@@ -10,9 +10,8 @@ WORKDIR /app
 # Copy dependency files for caching
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies using uv with cache mount
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+# Install dependencies using uv
+RUN uv sync --frozen --no-dev
 
 # Stage 2: Runtime - Minimal final image
 FROM python:3.11-slim
