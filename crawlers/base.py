@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 import asyncio
 import random
 import time
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
-from playwright.async_api import Page, async_playwright, Browser
+if TYPE_CHECKING:
+    from playwright.async_api import Page, Browser
 
 from crawler_logging import CrawlerLogger
 from models.book import PlatformRating
@@ -63,6 +67,7 @@ class BasePlatformCrawler(BaseCrawler):
         self._page: Page | None = None
 
     async def __aenter__(self):
+        from playwright.async_api import async_playwright
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(headless=True)
         self._page = await self._browser.new_page()
