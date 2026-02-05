@@ -12,6 +12,8 @@ dependencies = [
     "fastapi>=0.128.1",
     "uvicorn>=0.40.0",
     "supabase>=2.27.3",
+    "google-genai>=0.1.0",
+    "python-dotenv",
 ]
 
 [project.optional-dependencies]

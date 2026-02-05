@@ -43,7 +43,15 @@
       "Bash(npx next build:*)",
       "Bash(lsof:*)",
       "Bash(xargs kill -9 sleep 1)",
-      "Bash(xargs kill -9 echo \"done\")"
+      "Bash(xargs kill -9 echo \"done\")",
+      "Bash(git status:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: Make playwright import lazy to avoid ModuleNotFoundError on Railway\n\nThe API container doesn''t include playwright since only HTTP-based\ncrawlers are used. Move the import behind TYPE_CHECKING for type hints\nand defer async_playwright import to runtime inside __aenter__.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfeat: Make log level configurable via LOG_LEVEL env var\n\nDefault to DEBUG for detailed Railway logs. Can be overridden\nwith LOG_LEVEL=INFO in production.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: Use search.php for LibraryThing search URL\n\n/search?search= doesn''t return results, but /search.php?search= does.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "mcp__plugin_oh-my-claudecode_t__lsp_diagnostics",
+      "Bash(npm run build:*)",
+      "Bash(pkill:*)"
     ]
   }
 }

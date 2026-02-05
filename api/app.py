@@ -3,6 +3,9 @@
 import os
 import sys
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # 프로젝트 루트를 Python 경로에 추가
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

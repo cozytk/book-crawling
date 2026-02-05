@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from api.db import get_client, find_cached_search, save_search_result, get_all_searches
 from api.services.crawler_service import crawl_all, get_available_platforms
+from api.services.ai_service import generate_book_description
 
 router = APIRouter()
 
@@ -14,6 +15,7 @@ router = APIRouter()
 class SearchRequest(BaseModel):
     query: str
     platforms: list[str] | None = None
+    include_description: bool = False
 
 
 class PlatformInfo(BaseModel):
@@ -40,10 +42,19 @@ async def search_book(req: SearchRequest):
         client = get_client()
         cached = find_cached_search(client, query)
         if cached:
+            # 캐시된 결과에도 description 생성 가능
+            description = None
+            if req.include_description and cached["ratings"]:
+                first_result = cached["ratings"][0]
+                book_title = first_result.get("book_title", query)
+                author = first_result.get("author")
+                description = await generate_book_description(book_title, author)
+
             return {
                 "source": "cache",
                 "search": cached["search"],
                 "ratings": cached["ratings"],
+                "description": description,
             }
     except Exception:
         # Supabase 연결 실패 시 캐시 없이 진행
@@ -61,7 +72,16 @@ async def search_book(req: SearchRequest):
         except Exception:
             pass
 
-    # 4. 응답
+    # 4. AI 설명 생성 (옵션)
+    description = None
+    if req.include_description and result_dicts:
+        # 첫 번째 결과에서 책 제목과 작가 추출
+        first_result = result_dicts[0]
+        book_title = first_result.get("book_title", query)
+        author = first_result.get("author")
+        description = await generate_book_description(book_title, author)
+
+    # 5. 응답
     ratings = [r["normalized_rating"] for r in result_dicts if r.get("normalized_rating")]
     avg_rating = sum(ratings) / len(ratings) if ratings else None
     total_reviews = sum(r.get("review_count", 0) for r in result_dicts)
@@ -76,6 +96,7 @@ async def search_book(req: SearchRequest):
             "platform_count": len(result_dicts),
         },
         "ratings": result_dicts,
+        "description": description,
     }
 
 
@@ -134,7 +155,21 @@ async def search_book_stream(req: SearchRequest):
             async def cached_stream():
                 for r in cached["ratings"]:
                     yield f"data: {json.dumps(r, ensure_ascii=False)}\n\n"
-                yield f"event: done\ndata: {json.dumps({'source': 'cache', 'search': cached['search']}, ensure_ascii=False)}\n\n"
+
+                # AI 설명 생성 (옵션)
+                description = None
+                if req.include_description and cached["ratings"]:
+                    first_result = cached["ratings"][0]
+                    book_title = first_result.get("book_title", query)
+                    author = first_result.get("author")
+                    description = await generate_book_description(book_title, author)
+
+                summary = {
+                    'source': 'cache',
+                    'search': cached['search'],
+                    'description': description
+                }
+                yield f"event: done\ndata: {json.dumps(summary, ensure_ascii=False)}\n\n"
             return StreamingResponse(cached_stream(), media_type="text/event-stream")
     except Exception:
         client = None
@@ -155,6 +190,14 @@ async def search_book_stream(req: SearchRequest):
             except Exception:
                 pass
 
+        # AI 설명 생성 (옵션)
+        description = None
+        if req.include_description and results:
+            first_result = results[0]
+            book_title = first_result.get("book_title", query)
+            author = first_result.get("author")
+            description = await generate_book_description(book_title, author)
+
         # 요약 계산
         ratings = [r["normalized_rating"] for r in results if r.get("normalized_rating")]
         avg_rating = sum(ratings) / len(ratings) if ratings else None
@@ -169,6 +212,7 @@ async def search_book_stream(req: SearchRequest):
                 "total_reviews": total_reviews,
                 "platform_count": len(results),
             },
+            "description": description,
         }
         yield f"event: done\ndata: {json.dumps(summary, ensure_ascii=False)}\n\n"
 
