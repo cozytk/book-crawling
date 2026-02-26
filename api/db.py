@@ -112,6 +112,7 @@ def get_all_searches(
     offset: int = 0,
     platform: str | None = None,
     sort_platform: str | None = None,
+    with_count: bool = True,
 ) -> dict:
     """
     검색 히스토리 조회
@@ -143,36 +144,46 @@ def get_all_searches(
 
     if sort_target_platform:
         # 플랫폼 평점 정렬은 platform_ratings 기준으로 먼저 정렬 후 searches를 조인
+        select_args = (
+            f"search_id, normalized_rating, searches!inner({base_columns})",
+        )
+        if with_count:
+            query = client.table("platform_ratings").select(*select_args, count="exact")
+        else:
+            query = client.table("platform_ratings").select(*select_args)
         query = (
-            client.table("platform_ratings")
-            .select(
-                f"search_id, normalized_rating, searches!inner({base_columns})",
-                count="exact",
-            )
+            query
             .eq("platform", sort_target_platform)
             .order("normalized_rating", desc=is_desc, nullsfirst=False)
             .range(offset, offset + limit - 1)
         )
     elif platform:
         # 플랫폼 필터는 inner join으로 search 목록만 빠르게 조회
+        select_args = (f"{base_columns}, platform_ratings!inner(platform)",)
+        if with_count:
+            query = client.table("searches").select(*select_args, count="exact")
+        else:
+            query = client.table("searches").select(*select_args)
         query = (
-            client.table("searches")
-            .select(f"{base_columns}, platform_ratings!inner(platform)", count="exact")
+            query
             .eq("platform_ratings.platform", platform)
             .order(sort_by, desc=is_desc, nullsfirst=search_nullsfirst)
             .range(offset, offset + limit - 1)
         )
     else:
+        if with_count:
+            query = client.table("searches").select(base_columns, count="exact")
+        else:
+            query = client.table("searches").select(base_columns)
         query = (
-            client.table("searches")
-            .select(base_columns, count="exact")
+            query
             .order(sort_by, desc=is_desc, nullsfirst=search_nullsfirst)
             .range(offset, offset + limit - 1)
         )
 
     result = query.execute()
     raw_rows = result.data or []
-    total = result.count or len(raw_rows)
+    total = (result.count or 0) if with_count else len(raw_rows)
 
     if sort_target_platform:
         searches = []

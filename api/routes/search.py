@@ -322,6 +322,7 @@ async def list_searches(
     offset: int = 0,
     platform: str | None = None,
     sort_platform: str | None = None,
+    with_count: bool = True,
 ):
     """
     검색 히스토리 조회
@@ -333,6 +334,7 @@ async def list_searches(
         offset: 시작 위치
         platform: 특정 플랫폼 필터 (optional)
         sort_platform: 플랫폼 평점 정렬 기준 플랫폼 (sort_by=platform_rating일 때)
+        with_count: total count 포함 여부 (속도 최적화용)
     """
     try:
         client = get_client()
@@ -347,6 +349,7 @@ async def list_searches(
         offset=offset,
         platform=platform,
         sort_platform=sort_platform,
+        with_count=with_count,
     )
 
 

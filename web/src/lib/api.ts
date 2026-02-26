@@ -171,6 +171,7 @@ export async function getSearchHistory(params?: {
   offset?: number;
   platform?: string;
   sort_platform?: string;
+  with_count?: boolean;
 }): Promise<SearchHistoryResponse> {
   const searchParams = new URLSearchParams();
   if (params?.sort_by) searchParams.set("sort_by", params.sort_by);
@@ -179,6 +180,7 @@ export async function getSearchHistory(params?: {
   if (params?.offset) searchParams.set("offset", String(params.offset));
   if (params?.platform) searchParams.set("platform", params.platform);
   if (params?.sort_platform) searchParams.set("sort_platform", params.sort_platform);
+  if (params?.with_count !== undefined) searchParams.set("with_count", String(params.with_count));
 
   const res = await fetch(`${API_URL}/api/searches?${searchParams}`);
   if (!res.ok) throw new Error("검색 히스토리를 가져올 수 없습니다");
