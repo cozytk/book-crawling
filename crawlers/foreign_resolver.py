@@ -58,8 +58,12 @@ async def resolve_foreign_query(korean_query: str) -> ForeignQuery:
         ForeignQuery (query=None이면 해외 플랫폼 검색 불가)
     """
     if not _is_korean(korean_query):
-        # 영문 검색어는 그대로 사용
-        return ForeignQuery(query=korean_query)
+        # 영문 검색어도 ISBN을 찾아두면 해외 플랫폼(특히 LibraryThing) 정확도가 올라감
+        lookup = ISBNLookup()
+        isbn = lookup.get_isbn(korean_query)
+        if isbn:
+            logger.debug(f"영문 검색어 ISBN 연결: {korean_query} → {isbn}")
+        return ForeignQuery(query=korean_query, isbn=isbn)
 
     info = await _get_original_info(korean_query)
     if not info:
