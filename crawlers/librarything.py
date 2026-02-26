@@ -69,6 +69,23 @@ class LibraryThingCrawler(BaseHttpCrawler):
                 if response.status_code in {429, 503} and attempt < 2:
                     time.sleep(0.8 * (attempt + 1))
                     continue
+
+                if self._is_cloudflare_challenge(response.text):
+                    preview = re.sub(r"\s+", " ", response.text[:200]).strip()
+                    self.logger.error(
+                        "cloudflare_challenge",
+                        "LibraryThing challenge page detected",
+                        {
+                            "url": str(response.url),
+                            "status": response.status_code,
+                            "response_preview": preview,
+                        },
+                    )
+                    if attempt < 2:
+                        time.sleep(0.8 * (attempt + 1))
+                        continue
+                    raise RuntimeError("LibraryThing challenge page detected")
+
                 response.raise_for_status()
                 return response.text, response.url
             except Exception as e:
@@ -81,6 +98,16 @@ class LibraryThingCrawler(BaseHttpCrawler):
         if last_error is not None:
             raise last_error
         raise RuntimeError("LibraryThing 요청 실패")
+
+    def _is_cloudflare_challenge(self, html: str) -> bool:
+        """Cloudflare 챌린지 페이지 여부 확인"""
+        lowered = html.lower()
+        return (
+            "just a moment" in lowered
+            or "performing security verification" in lowered
+            or "cf-challenge" in lowered
+            or "/cdn-cgi/challenge-platform" in lowered
+        )
 
     def _fetch_search_results(self, url: str) -> str | None:
         """검색 결과 페이지 HTML 가져오기"""

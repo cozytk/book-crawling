@@ -43,6 +43,20 @@ class TestLibraryThingNormalizeWorkUrl:
         assert normalized == "https://www.librarything.com/work/5382831"
 
 
+class TestLibraryThingCloudflareDetection:
+    """Cloudflare 챌린지 감지 테스트"""
+
+    def test_is_cloudflare_challenge_detects_challenge_page(self):
+        crawler = LibraryThingCrawler()
+        html = "<html><title>Just a moment...</title>Performing security verification</html>"
+        assert crawler._is_cloudflare_challenge(html) is True
+
+    def test_is_cloudflare_challenge_ignores_normal_page(self):
+        crawler = LibraryThingCrawler()
+        html = "<html><h1>Clean Code</h1><p>Book details</p></html>"
+        assert crawler._is_cloudflare_challenge(html) is False
+
+
 class TestLibraryThingSearchFallback:
     """검색 우회 로직 테스트"""
 
