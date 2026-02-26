@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { getSearchHistory, SearchHistoryItem, PLATFORM_META } from "@/lib/api";
 
@@ -47,6 +47,14 @@ export default function HistoryPage() {
   }, [fetchData]);
 
   const platforms = Object.entries(PLATFORM_META);
+  const hasData = searches.length > 0;
+  const isRefreshing = isLoading && hasData;
+  const filteredSearches = useMemo(() => {
+    if (!platformFilter) return searches;
+    return searches.filter((search) =>
+      search.ratings.some((rating) => rating.platform === platformFilter)
+    );
+  }, [searches, platformFilter]);
 
   return (
     <div className="space-y-6">
@@ -120,9 +128,14 @@ export default function HistoryPage() {
             </select>
           </div>
 
-          <span className="text-sm text-gray-400 ml-auto">
-            총 {total}건
-          </span>
+          <div className="ml-auto flex items-center gap-3">
+            {isRefreshing && (
+              <span className="text-xs text-blue-600 animate-pulse">
+                필터 적용 중...
+              </span>
+            )}
+            <span className="text-sm text-gray-400">총 {total}건</span>
+          </div>
         </div>
       </div>
 
@@ -134,20 +147,20 @@ export default function HistoryPage() {
       )}
 
       {/* 로딩 */}
-      {isLoading && (
+      {isLoading && !hasData && (
         <div className="text-center py-12 text-gray-500">불러오는 중...</div>
       )}
 
       {/* 결과 목록 */}
-      {!isLoading && searches.length === 0 && (
+      {!isLoading && filteredSearches.length === 0 && (
         <div className="text-center py-12 text-gray-500">
           검색 기록이 없습니다.
         </div>
       )}
 
-      {!isLoading && searches.length > 0 && (
-        <div className="space-y-3">
-          {searches.map((search) => {
+      {filteredSearches.length > 0 && (
+        <div className={`space-y-3 transition-opacity ${isRefreshing ? "opacity-70" : "opacity-100"}`}>
+          {filteredSearches.map((search) => {
             const displayedRatings = platformFilter
               ? search.ratings.filter((r) => r.platform === platformFilter)
               : search.ratings;
