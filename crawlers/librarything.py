@@ -74,12 +74,8 @@ class LibraryThingCrawler(BaseHttpCrawler):
                     preview = re.sub(r"\s+", " ", response.text[:200]).strip()
                     self.logger.error(
                         "cloudflare_challenge",
-                        "LibraryThing challenge page detected",
-                        {
-                            "url": str(response.url),
-                            "status": response.status_code,
-                            "response_preview": preview,
-                        },
+                        f"LibraryThing challenge page detected status={response.status_code} "
+                        f"url={response.url} response_preview={preview}",
                     )
                     if attempt < 2:
                         time.sleep(0.8 * (attempt + 1))
