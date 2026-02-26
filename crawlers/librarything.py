@@ -6,6 +6,7 @@ import os
 import random
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import cloudscraper
@@ -110,7 +111,7 @@ class LibraryThingCrawler(BaseHttpCrawler):
                 return str(final_url), title
         except Exception:
             pass
-        return self._search_via_brave(identifier)
+        return self._search_via_fallback(identifier)
 
     def search_by_keyword(self, keyword: str) -> tuple[str | None, str]:
         """제목으로 검색"""
@@ -244,8 +245,40 @@ class LibraryThingCrawler(BaseHttpCrawler):
             self._cached_review_count = review_count
             return href, title
 
-        # Cloudflare 등으로 직접 크롤링이 막히는 환경(Railway)에서 Brave Search 결과 URL로 우회
-        return self._search_via_brave(keyword)
+        # Cloudflare 등으로 직접 크롤링이 막히는 환경(Railway)에서 검색 엔진 결과 URL로 우회
+        return self._search_via_fallback(keyword)
+
+    def _normalize_work_url(self, raw_url: str) -> str | None:
+        """검색엔진 결과 URL에서 LibraryThing work URL만 추출/정규화"""
+        url = raw_url.strip()
+        if not url:
+            return None
+
+        if url.startswith("//"):
+            url = f"https:{url}"
+
+        parsed = urllib.parse.urlparse(url)
+        if "duckduckgo.com" in parsed.netloc:
+            redirected = urllib.parse.parse_qs(parsed.query).get("uddg", [""])[0]
+            if redirected:
+                url = urllib.parse.unquote(redirected)
+
+        if url.startswith("/"):
+            url = f"{self.base_url}{url}"
+
+        work_id_match = re.search(r"/work/\d+", url)
+        if not work_id_match:
+            return None
+        return f"{self.base_url}{work_id_match.group(0)}"
+
+    def _search_via_fallback(self, keyword: str) -> tuple[str | None, str]:
+        """검색엔진 우회 (Brave → DuckDuckGo 순서)"""
+        brave_result = self._search_via_brave(keyword)
+        if brave_result[0]:
+            return brave_result
+
+        self.logger.debug("Brave fallback failed, trying DuckDuckGo", keyword=keyword)
+        return self._search_via_duckduckgo(keyword)
 
     def _search_via_brave(self, keyword: str) -> tuple[str | None, str]:
         """Brave Search API로 LibraryThing work URL 우회 검색"""
@@ -253,36 +286,83 @@ class LibraryThingCrawler(BaseHttpCrawler):
         if not api_key:
             return None, ""
 
-        try:
-            query = f'site:librarything.com/work "{keyword}"'
+        queries = [
+            f'site:librarything.com/work "{keyword}"',
+            f"site:librarything.com/work {keyword}",
+        ]
+
+        for query in queries:
             params = urllib.parse.urlencode({"q": query, "count": 5})
             url = f"https://api.search.brave.com/res/v1/web/search?{params}"
-
             req = urllib.request.Request(url)
             req.add_header("X-Subscription-Token", api_key)
             req.add_header("Accept", "application/json")
             req.add_header("User-Agent", self.user_agent)
 
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
+            payload: dict | None = None
+            for attempt in range(2):
+                try:
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        payload = json.loads(resp.read().decode("utf-8"))
+                    break
+                except urllib.error.HTTPError as e:
+                    if e.code == 429 and attempt < 1:
+                        time.sleep(1.0)
+                        continue
+                    self.logger.debug(
+                        "Brave request failed",
+                        query=query,
+                        status=e.code,
+                    )
+                    break
+                except Exception as e:
+                    self.logger.debug(
+                        "Brave request failed",
+                        query=query,
+                        error=str(e),
+                    )
+                    break
+
+            if not payload:
+                continue
 
             results = payload.get("web", {}).get("results", [])
             for item in results:
-                work_url = str(item.get("url", ""))
-                if "librarything.com/work/" not in work_url:
+                work_url = self._normalize_work_url(str(item.get("url", "")))
+                if not work_url:
                     continue
-
-                # /t/ 이하가 붙어도 get_rating에서 다시 fetch 가능한 형태로 정규화
-                work_id_match = re.search(r"/work/\d+", work_url)
-                if work_id_match:
-                    work_url = f"{self.base_url}{work_id_match.group(0)}"
 
                 title = str(item.get("title", "")).replace(" | LibraryThing", "").strip()
                 if not title:
                     title = keyword
                 return work_url, title
-        except Exception:
+
+        return None, ""
+
+    def _search_via_duckduckgo(self, keyword: str) -> tuple[str | None, str]:
+        """DuckDuckGo HTML 검색으로 LibraryThing work URL 우회 검색"""
+        query = f'site:librarything.com/work "{keyword}"'
+        url = f"https://duckduckgo.com/html/?{urllib.parse.urlencode({'q': query})}"
+
+        try:
+            req = urllib.request.Request(url)
+            req.add_header("User-Agent", self.user_agent)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                html = resp.read().decode("utf-8", errors="replace")
+        except Exception as e:
+            self.logger.debug("DuckDuckGo request failed", error=str(e))
             return None, ""
+
+        soup = BeautifulSoup(html, "html.parser")
+        for link in soup.select("a.result__a, h2 a"):
+            work_url = self._normalize_work_url(str(link.get("href", "")))
+            if not work_url:
+                continue
+
+            title = link.get_text(" ", strip=True).replace(" | LibraryThing", "").strip()
+            if not title:
+                title = keyword
+            return work_url, title
 
         return None, ""
 
