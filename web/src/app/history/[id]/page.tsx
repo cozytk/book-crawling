@@ -5,6 +5,12 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { getSearch, searchBook, SearchResult, PLATFORM_META } from "@/lib/api";
 
+const compareNormalizedDesc = (a: SearchResult["ratings"][number], b: SearchResult["ratings"][number]) => {
+  if (a.normalized_rating === null) return 1;
+  if (b.normalized_rating === null) return -1;
+  return b.normalized_rating - a.normalized_rating;
+};
+
 export default function HistoryDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -120,7 +126,7 @@ export default function HistoryDetailPage() {
 
           <div className="space-y-3">
             {[...result.ratings]
-              .sort((a, b) => (b.normalized_rating || 0) - (a.normalized_rating || 0))
+              .sort(compareNormalizedDesc)
               .map((rating) => {
                 const meta = PLATFORM_META[rating.platform] || {
                   label: rating.platform,

@@ -132,6 +132,7 @@ def get_all_searches(
 
     is_desc = order.lower() == "desc"
     base_columns = "id,query,avg_rating,total_reviews,platform_count,created_at"
+    search_nullsfirst = False if sort_by == "avg_rating" else None
 
     # 플랫폼 평점 정렬은 해당 플랫폼 relation 기준으로 order
     sort_target_platform = None
@@ -149,7 +150,7 @@ def get_all_searches(
                 count="exact",
             )
             .eq("platform", sort_target_platform)
-            .order("normalized_rating", desc=is_desc)
+            .order("normalized_rating", desc=is_desc, nullsfirst=False)
             .range(offset, offset + limit - 1)
         )
     elif platform:
@@ -158,14 +159,14 @@ def get_all_searches(
             client.table("searches")
             .select(f"{base_columns}, platform_ratings!inner(platform)", count="exact")
             .eq("platform_ratings.platform", platform)
-            .order(sort_by, desc=is_desc)
+            .order(sort_by, desc=is_desc, nullsfirst=search_nullsfirst)
             .range(offset, offset + limit - 1)
         )
     else:
         query = (
             client.table("searches")
             .select(base_columns, count="exact")
-            .order(sort_by, desc=is_desc)
+            .order(sort_by, desc=is_desc, nullsfirst=search_nullsfirst)
             .range(offset, offset + limit - 1)
         )
 

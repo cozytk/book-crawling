@@ -7,6 +7,12 @@ import { getSearchHistory, SearchHistoryItem, PLATFORM_META } from "@/lib/api";
 type SortBy = "created_at" | "avg_rating" | "total_reviews" | "platform_rating";
 type Order = "asc" | "desc";
 
+const compareNormalizedDesc = (a: SearchHistoryItem["ratings"][number], b: SearchHistoryItem["ratings"][number]) => {
+  if (a.normalized_rating === null) return 1;
+  if (b.normalized_rating === null) return -1;
+  return b.normalized_rating - a.normalized_rating;
+};
+
 export default function HistoryPage() {
   const [searches, setSearches] = useState<SearchHistoryItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -218,7 +224,7 @@ export default function HistoryPage() {
                 {displayedRatings.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-3">
                     {[...displayedRatings]
-                      .sort((a, b) => (b.normalized_rating || 0) - (a.normalized_rating || 0))
+                      .sort(compareNormalizedDesc)
                       .map((r) => {
                         const meta = PLATFORM_META[r.platform] || { label: r.platform, color: "#666" };
                         return (
