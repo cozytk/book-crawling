@@ -141,11 +141,15 @@ def get_all_searches(
             sort_by = "created_at"
 
     if sort_target_platform:
+        # 플랫폼 평점 정렬은 platform_ratings 기준으로 먼저 정렬 후 searches를 조인
         query = (
-            client.table("searches")
-            .select(f"{base_columns}, platform_ratings!inner(platform, normalized_rating)", count="exact")
-            .eq("platform_ratings.platform", sort_target_platform)
-            .order("normalized_rating", desc=is_desc, foreign_table="platform_ratings")
+            client.table("platform_ratings")
+            .select(
+                f"search_id, normalized_rating, searches!inner({base_columns})",
+                count="exact",
+            )
+            .eq("platform", sort_target_platform)
+            .order("normalized_rating", desc=is_desc)
             .range(offset, offset + limit - 1)
         )
     elif platform:
@@ -166,8 +170,23 @@ def get_all_searches(
         )
 
     result = query.execute()
-    searches = result.data or []
-    total = result.count or len(searches)
+    raw_rows = result.data or []
+    total = result.count or len(raw_rows)
+
+    if sort_target_platform:
+        searches = []
+        seen_ids: set[str] = set()
+        for row in raw_rows:
+            search = row.get("searches")
+            if not search:
+                continue
+            sid = search.get("id")
+            if not sid or sid in seen_ids:
+                continue
+            seen_ids.add(sid)
+            searches.append(search)
+    else:
+        searches = raw_rows
 
     # relation 필드는 상세 ratings 조회 전에 제거
     for s in searches:
