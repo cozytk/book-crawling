@@ -43,7 +43,7 @@ export default function HistoryPage() {
   const [sortBy, setSortBy] = useState<SortBy>("created_at");
   const [order, setOrder] = useState<Order>("desc");
   const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(
-    new Set<string>()
+    new Set(ALL_PLATFORMS)
   );
   const [sortPlatform, setSortPlatform] = useState<string>("aladin");
   const [page, setPage] = useState(0);
@@ -79,7 +79,7 @@ export default function HistoryPage() {
     fetchData();
   }, [fetchData]);
 
-  const allSelected = selectedPlatforms.size === 0;
+  const allSelected = selectedPlatforms.size === ALL_PLATFORMS.length;
 
   const filteredSearches = useMemo(() => {
     if (allSelected) return allSearches;
@@ -144,8 +144,8 @@ export default function HistoryPage() {
   const platforms = Object.entries(PLATFORM_META);
 
   const toggleAllPlatforms = useCallback(() => {
-    // 전체 선택 = 모든 플랫폼 필터 해제(전체 보기)
-    setSelectedPlatforms(new Set<string>());
+    // 전체 선택 = 모든 플랫폼 표시
+    setSelectedPlatforms(new Set(ALL_PLATFORMS));
     setPage(0);
   }, []);
 
