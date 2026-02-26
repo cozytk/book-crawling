@@ -43,7 +43,7 @@ export default function HistoryPage() {
   const [sortBy, setSortBy] = useState<SortBy>("created_at");
   const [order, setOrder] = useState<Order>("desc");
   const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(
-    new Set(ALL_PLATFORMS)
+    new Set<string>()
   );
   const [sortPlatform, setSortPlatform] = useState<string>("aladin");
   const [page, setPage] = useState(0);
@@ -79,7 +79,7 @@ export default function HistoryPage() {
     fetchData();
   }, [fetchData]);
 
-  const allSelected = selectedPlatforms.size === ALL_PLATFORMS.length;
+  const allSelected = selectedPlatforms.size === 0;
 
   const filteredSearches = useMemo(() => {
     if (allSelected) return allSearches;
@@ -144,39 +144,19 @@ export default function HistoryPage() {
   const platforms = Object.entries(PLATFORM_META);
 
   const toggleAllPlatforms = useCallback(() => {
-    setSelectedPlatforms(new Set(ALL_PLATFORMS));
+    // 전체 선택 = 모든 플랫폼 필터 해제(전체 보기)
+    setSelectedPlatforms(new Set<string>());
     setPage(0);
   }, []);
 
-  const togglePlatform = useCallback((platform: string) => {
-    setSelectedPlatforms((prev) => {
-      const next = new Set(prev);
-      if (next.has(platform)) {
-        if (next.size === 1) return prev;
-        next.delete(platform);
-      } else {
-        next.add(platform);
-      }
-      return next;
-    });
+  const selectSinglePlatform = useCallback((platform: string) => {
+    // 플랫폼 태그 클릭 = 해당 플랫폼 단일 선택
+    setSelectedPlatforms(new Set([platform]));
     setPage(0);
   }, []);
 
   const handleTagClick = useCallback((platform: string) => {
-    setSelectedPlatforms((prev) => {
-      if (prev.size === ALL_PLATFORMS.length) {
-        return new Set([platform]);
-      }
-
-      const next = new Set(prev);
-      if (next.has(platform)) {
-        if (next.size === 1) return prev;
-        next.delete(platform);
-      } else {
-        next.add(platform);
-      }
-      return next;
-    });
+    setSelectedPlatforms(new Set([platform]));
     setPage(0);
   }, []);
 
@@ -276,7 +256,7 @@ export default function HistoryPage() {
             return (
               <button
                 key={platform}
-                onClick={() => togglePlatform(platform)}
+                onClick={() => selectSinglePlatform(platform)}
                 className="px-3 py-1.5 rounded-full text-sm font-medium border transition-colors"
                 style={
                   enabled
