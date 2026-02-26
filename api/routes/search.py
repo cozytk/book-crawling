@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -102,39 +103,6 @@ async def search_book(req: SearchRequest):
     }
 
 
-@router.get("/search/{search_id}")
-async def get_search(search_id: str):
-    """캐시된 검색 결과 조회"""
-    try:
-        client = get_client()
-    except Exception:
-        raise HTTPException(status_code=503, detail="데이터베이스 연결 실패")
-
-    search = (
-        client.table("searches")
-        .select("*")
-        .eq("id", search_id)
-        .limit(1)
-        .execute()
-    )
-
-    if not search.data:
-        raise HTTPException(status_code=404, detail="검색 결과를 찾을 수 없습니다")
-
-    ratings = (
-        client.table("platform_ratings")
-        .select("*")
-        .eq("search_id", search_id)
-        .execute()
-    )
-
-    return {
-        "source": "cache",
-        "search": search.data[0],
-        "ratings": ratings.data,
-    }
-
-
 @router.get("/search/check")
 async def check_cache(query: str):
     """
@@ -155,6 +123,40 @@ async def check_cache(query: str):
         pass
 
     return {"cached": False}
+
+
+@router.get("/search/{search_id}")
+async def get_search(search_id: UUID):
+    """캐시된 검색 결과 조회"""
+    try:
+        client = get_client()
+    except Exception:
+        raise HTTPException(status_code=503, detail="데이터베이스 연결 실패")
+
+    search_id_str = str(search_id)
+    search = (
+        client.table("searches")
+        .select("*")
+        .eq("id", search_id_str)
+        .limit(1)
+        .execute()
+    )
+
+    if not search.data:
+        raise HTTPException(status_code=404, detail="검색 결과를 찾을 수 없습니다")
+
+    ratings = (
+        client.table("platform_ratings")
+        .select("*")
+        .eq("search_id", search_id_str)
+        .execute()
+    )
+
+    return {
+        "source": "cache",
+        "search": search.data[0],
+        "ratings": ratings.data,
+    }
 
 
 @router.post("/search/stream")

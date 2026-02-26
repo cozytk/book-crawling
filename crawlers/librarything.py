@@ -1,9 +1,13 @@
 """LibraryThing HTTP 기반 크롤러 (cloudscraper 사용)"""
 
+import base64
+import json
+import random
 import re
+import time
 import urllib.parse
 import cloudscraper
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from .base_http import BaseHttpCrawler
 from .utils import is_isbn
@@ -25,7 +29,7 @@ class LibraryThingCrawler(BaseHttpCrawler):
         self._scraper = cloudscraper.create_scraper(
             browser={
                 'browser': 'chrome',
-                'platform': 'darwin',
+                'platform': 'linux',
                 'desktop': True
             }
         )
@@ -37,11 +41,43 @@ class LibraryThingCrawler(BaseHttpCrawler):
         self._cached_rating: float | None = None
         self._cached_review_count: int = 0
 
-    def _fetch_with_scraper(self, url: str) -> tuple[str, str]:
+    def _fetch_with_scraper(
+        self,
+        url: str,
+        referer: str | None = None,
+        is_xhr: bool = False,
+    ) -> tuple[str, str]:
         """cloudscraper로 페이지 가져오기"""
-        response = self._scraper.get(url, timeout=15, allow_redirects=True)
-        response.raise_for_status()
-        return response.text, response.url
+        headers: dict[str, str] = {}
+        if referer:
+            headers["Referer"] = referer
+        if is_xhr:
+            headers["X-Requested-With"] = "XMLHttpRequest"
+
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = self._scraper.get(
+                    url,
+                    timeout=15,
+                    allow_redirects=True,
+                    headers=headers or None,
+                )
+                if response.status_code in {429, 503} and attempt < 2:
+                    time.sleep(0.8 * (attempt + 1))
+                    continue
+                response.raise_for_status()
+                return response.text, response.url
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    time.sleep(0.8 * (attempt + 1))
+                    continue
+                raise
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("LibraryThing 요청 실패")
 
     def _fetch_search_results(self, url: str) -> str | None:
         """검색 결과 페이지 HTML 가져오기"""
@@ -94,13 +130,94 @@ class LibraryThingCrawler(BaseHttpCrawler):
         # 방법 2: 검색 페이지 시도 (term 파라미터 사용)
         return self._search_via_search_page(keyword)
 
+    def _get_input_value(self, soup: BeautifulSoup, name: str, default: str = "") -> str:
+        """검색 페이지 hidden input 값 추출"""
+        input_tag = soup.select_one(f'input[name="{name}"]')
+        if input_tag and input_tag.get("value") is not None:
+            return str(input_tag.get("value"))
+        return default
+
+    def _fetch_ajax_search_results(
+        self, keyword: str, search_html: str | None, referer: str
+    ) -> str | None:
+        """ajax_newsearch.php를 호출해 검색 결과 HTML 조각 반환"""
+        if not search_html:
+            return None
+
+        try:
+            soup = BeautifulSoup(search_html, "html.parser")
+            params = {
+                "search": keyword,
+                "searchtype": "newwork_titles",
+                "page": "1",
+                "sortchoice": self._get_input_value(soup, "sortchoice", "0"),
+                "optionidpotential": self._get_input_value(soup, "optionidpotential", "0"),
+                "optionidreal": self._get_input_value(soup, "optionidreal", "0"),
+                "randomnumber": str(random.randint(1000, 9999)),
+            }
+            combinewith = self._get_input_value(soup, "combinewith", "")
+            if combinewith:
+                params["combinewith"] = combinewith
+
+            ajax_url = f"{self.base_url}/ajax_newsearch.php?{urllib.parse.urlencode(params)}"
+            payload_text, _ = self._fetch_with_scraper(
+                ajax_url,
+                referer=referer,
+                is_xhr=True,
+            )
+            payload = json.loads(payload_text)
+            encoded_html = payload.get("text", "")
+            if not encoded_html:
+                return None
+            return base64.b64decode(encoded_html).decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
+    def _extract_rating_from_search_link(self, link: Tag) -> tuple[float | None, int]:
+        """검색 결과 row에서 평점/리뷰 수 추출"""
+        container = link.find_parent("tr")
+        if container is None:
+            container = link.parent
+        text = container.get_text(" ", strip=True) if container else ""
+
+        rating = None
+        review_count = 0
+
+        rating_match = re.search(r'(\d+(?:\.\d+)?)\s*stars?', text, re.IGNORECASE)
+        if rating_match:
+            try:
+                rating = float(rating_match.group(1))
+            except Exception:
+                pass
+
+        review_match = re.search(r'([\d,]+)\s*reviews?', text, re.IGNORECASE)
+        if review_match:
+            review_count = int(review_match.group(1).replace(",", ""))
+
+        return rating, review_count
+
+    def _select_best_link(self, links: list[Tag], query: str) -> Tag | None:
+        """제목 매칭 + 리뷰 수 기준으로 최적 링크 선택"""
+        if not links:
+            return None
+
+        matched = [
+            link for link in links
+            if self._is_title_match(query, link.get_text(strip=True))
+        ]
+        pool = matched or links
+        return max(pool, key=lambda link: self._extract_rating_from_search_link(link)[1])
+
     def _search_via_search_page(self, keyword: str) -> tuple[str | None, str]:
         """검색 페이지를 통한 검색 및 폴백"""
         encoded = urllib.parse.quote(keyword)
-        search_url = f"{self.base_url}/search.php?search={encoded}&searchtype=newwork_titles&sortchoice=0"
+        search_url = f"{self.base_url}/search.php?term={encoded}&searchtype=newwork_titles&sortchoice=0"
         
         html = self._fetch_search_results(search_url)
-        link = self._find_link_in_html(html)
+        link = self._find_link_in_html(html, keyword)
+        if not link:
+            ajax_html = self._fetch_ajax_search_results(keyword, html, search_url)
+            link = self._find_link_in_html(ajax_html, keyword)
 
         # 결과가 없으면 부제로 재시도
         if not link:
@@ -108,34 +225,61 @@ class LibraryThingCrawler(BaseHttpCrawler):
             if primary != keyword:
                 self.logger.debug(f"주제목으로 재시도: {primary}")
                 encoded_primary = urllib.parse.quote(primary)
-                search_url = f"{self.base_url}/search.php?search={encoded_primary}&searchtype=newwork_titles&sortchoice=0"
+                search_url = f"{self.base_url}/search.php?term={encoded_primary}&searchtype=newwork_titles&sortchoice=0"
                 html = self._fetch_search_results(search_url)
-                link = self._find_link_in_html(html)
+                link = self._find_link_in_html(html, primary)
+                if not link:
+                    ajax_html = self._fetch_ajax_search_results(primary, html, search_url)
+                    link = self._find_link_in_html(ajax_html, primary)
 
         if link:
             href = link.get("href", "")
             if not href.startswith("http"):
                 href = f"{self.base_url}{href}"
-            
-            try:
-                work_html, final_work_url = self._fetch_with_scraper(href)
-                title, rating, review_count = self._parse_work_page(work_html)
-
-                if title:
-                    self._cached_rating = rating
-                    self._cached_review_count = review_count
-                    return str(final_work_url), title
-            except Exception:
-                pass
+            title = link.get_text(strip=True) or keyword
+            rating, review_count = self._extract_rating_from_search_link(link)
+            self._cached_rating = rating
+            self._cached_review_count = review_count
+            return href, title
         
         return None, ""
 
-    def _find_link_in_html(self, html: str | None) -> BeautifulSoup | None:
+    def _find_link_in_html(self, html: str | None, query: str) -> Tag | None:
         """HTML에서 작품 링크 찾기"""
         if not html:
             return None
         soup = BeautifulSoup(html, "html.parser")
-        return soup.select_one("td.worktitle a") or soup.select_one('a[href*="/work/"]')
+
+        raw_links = soup.select(
+            'p.item a[href*="/work/"], td.worktitle a[href*="/work/"], a[href*="/work/"][data-workid]'
+        )
+        deduped: list[Tag] = []
+        seen_work_ids: set[str] = set()
+
+        for link in raw_links:
+            href = str(link.get("href", ""))
+            if not href:
+                continue
+            if any(suffix in href for suffix in ("/members", "/reviews", "/editions")):
+                continue
+
+            # 이미지 링크면 같은 row의 제목 링크로 교체
+            if not link.get_text(strip=True):
+                row = link.find_parent("tr")
+                if row:
+                    title_link = row.select_one('p.item a[href*="/work/"]')
+                    if title_link and title_link.get_text(strip=True):
+                        link = title_link
+                        href = str(link.get("href", ""))
+
+            work_id_match = re.search(r"/work/\d+", href)
+            dedupe_key = work_id_match.group(0) if work_id_match else href
+            if dedupe_key in seen_work_ids:
+                continue
+            seen_work_ids.add(dedupe_key)
+            deduped.append(link)
+
+        return self._select_best_link(deduped, query)
 
     def _is_title_match(self, query: str, result_title: str) -> bool:
         """제목 일치 여부 확인"""
