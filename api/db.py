@@ -111,42 +111,90 @@ def get_all_searches(
     limit: int = 50,
     offset: int = 0,
     platform: str | None = None,
+    sort_platform: str | None = None,
 ) -> dict:
     """
-    검색 히스토리 조회 (최적화: 단일 쿼리 + DB 레벨 필터링)
+    검색 히스토리 조회
 
     Returns:
         {"searches": [...], "total": int}
     """
     # 허용된 정렬 필드
-    allowed_sort = {"created_at", "avg_rating", "total_reviews", "platform_count"}
+    allowed_sort = {
+        "created_at",
+        "avg_rating",
+        "total_reviews",
+        "platform_count",
+        "platform_rating",
+    }
     if sort_by not in allowed_sort:
         sort_by = "created_at"
 
     is_desc = order.lower() == "desc"
+    base_columns = "id,query,avg_rating,total_reviews,platform_count,created_at"
 
-    # Foreign key 조인으로 한 번에 가져오기
-    # platform_ratings(*)는 searches.id = platform_ratings.search_id 관계 활용
-    query = (
-        client.table("searches")
-        .select("*, platform_ratings(*)", count="exact")
-        .order(sort_by, desc=is_desc)
-    )
+    # 플랫폼 평점 정렬은 해당 플랫폼 relation 기준으로 order
+    sort_target_platform = None
+    if sort_by == "platform_rating":
+        sort_target_platform = platform or sort_platform
+        if not sort_target_platform:
+            sort_by = "created_at"
 
-    # 플랫폼 필터를 DB 레벨에서 적용
-    if platform:
-        # platform_ratings 테이블에서 해당 플랫폼이 있는 검색만 필터
-        query = query.filter("platform_ratings.platform", "eq", platform)
+    if sort_target_platform:
+        query = (
+            client.table("searches")
+            .select(f"{base_columns}, platform_ratings!inner(platform, normalized_rating)", count="exact")
+            .eq("platform_ratings.platform", sort_target_platform)
+            .order("normalized_rating", desc=is_desc, foreign_table="platform_ratings")
+            .range(offset, offset + limit - 1)
+        )
+    elif platform:
+        # 플랫폼 필터는 inner join으로 search 목록만 빠르게 조회
+        query = (
+            client.table("searches")
+            .select(f"{base_columns}, platform_ratings!inner(platform)", count="exact")
+            .eq("platform_ratings.platform", platform)
+            .order(sort_by, desc=is_desc)
+            .range(offset, offset + limit - 1)
+        )
+    else:
+        query = (
+            client.table("searches")
+            .select(base_columns, count="exact")
+            .order(sort_by, desc=is_desc)
+            .range(offset, offset + limit - 1)
+        )
 
-    query = query.range(offset, offset + limit - 1)
     result = query.execute()
-
-    searches = result.data
+    searches = result.data or []
     total = result.count or len(searches)
 
-    # Supabase는 중첩 객체를 ratings 키에 자동으로 매핑
-    # platform_ratings(*)는 각 search의 "platform_ratings" 필드로 들어감
+    # relation 필드는 상세 ratings 조회 전에 제거
     for s in searches:
-        s["ratings"] = s.pop("platform_ratings", [])
+        s.pop("platform_ratings", None)
+
+    if not searches:
+        return {"searches": [], "total": total}
+
+    # 현재 페이지 search_id 기준으로 ratings만 조회 (전체 join보다 빠름)
+    search_ids = [s["id"] for s in searches]
+    ratings_query = (
+        client.table("platform_ratings")
+        .select("*")
+        .in_("search_id", search_ids)
+    )
+    if platform:
+        ratings_query = ratings_query.eq("platform", platform)
+
+    ratings_result = ratings_query.execute()
+    ratings = ratings_result.data or []
+
+    ratings_map: dict[str, list[dict]] = {}
+    for rating in ratings:
+        search_id = rating["search_id"]
+        ratings_map.setdefault(search_id, []).append(rating)
+
+    for s in searches:
+        s["ratings"] = ratings_map.get(s["id"], [])
 
     return {"searches": searches, "total": total}

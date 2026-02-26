@@ -40,25 +40,26 @@ async def search_book(req: SearchRequest):
 
     query = req.query.strip()
 
-    # 1. 캐시 확인
+    # 1. 캐시 확인 (force_refresh=false일 때만)
     try:
         client = get_client()
-        cached = find_cached_search(client, query)
-        if cached:
-            # 캐시된 결과에도 description 생성 가능
-            description = None
-            if req.include_description and cached["ratings"]:
-                first_result = cached["ratings"][0]
-                book_title = first_result.get("book_title", query)
-                author = first_result.get("author")
-                description = await generate_book_description(book_title, author)
+        if not req.force_refresh:
+            cached = find_cached_search(client, query)
+            if cached:
+                # 캐시된 결과에도 description 생성 가능
+                description = None
+                if req.include_description and cached["ratings"]:
+                    first_result = cached["ratings"][0]
+                    book_title = first_result.get("book_title", query)
+                    author = first_result.get("author")
+                    description = await generate_book_description(book_title, author)
 
-            return {
-                "source": "cache",
-                "search": cached["search"],
-                "ratings": cached["ratings"],
-                "description": description,
-            }
+                return {
+                    "source": "cache",
+                    "search": cached["search"],
+                    "ratings": cached["ratings"],
+                    "description": description,
+                }
     except Exception:
         # Supabase 연결 실패 시 캐시 없이 진행
         client = None
@@ -320,23 +321,33 @@ async def list_searches(
     limit: int = 50,
     offset: int = 0,
     platform: str | None = None,
+    sort_platform: str | None = None,
 ):
     """
     검색 히스토리 조회
 
     Query params:
-        sort_by: created_at | avg_rating | total_reviews
+        sort_by: created_at | avg_rating | total_reviews | platform_rating
         order: asc | desc
         limit: 페이지 크기 (기본 50)
         offset: 시작 위치
         platform: 특정 플랫폼 필터 (optional)
+        sort_platform: 플랫폼 평점 정렬 기준 플랫폼 (sort_by=platform_rating일 때)
     """
     try:
         client = get_client()
     except Exception:
         raise HTTPException(status_code=503, detail="데이터베이스 연결 실패")
 
-    return get_all_searches(client, sort_by=sort_by, order=order, limit=limit, offset=offset, platform=platform)
+    return get_all_searches(
+        client,
+        sort_by=sort_by,
+        order=order,
+        limit=limit,
+        offset=offset,
+        platform=platform,
+        sort_platform=sort_platform,
+    )
 
 
 @router.get("/platforms")

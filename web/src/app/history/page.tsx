@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { getSearchHistory, SearchHistoryItem, PLATFORM_META } from "@/lib/api";
 
-type SortBy = "created_at" | "avg_rating" | "total_reviews";
+type SortBy = "created_at" | "avg_rating" | "total_reviews" | "platform_rating";
 type Order = "asc" | "desc";
 
 export default function HistoryPage() {
@@ -17,6 +17,7 @@ export default function HistoryPage() {
   const [sortBy, setSortBy] = useState<SortBy>("created_at");
   const [order, setOrder] = useState<Order>("desc");
   const [platformFilter, setPlatformFilter] = useState<string>("");
+  const [sortPlatform, setSortPlatform] = useState<string>("aladin");
   const [page, setPage] = useState(0);
   const pageSize = 20;
 
@@ -30,6 +31,7 @@ export default function HistoryPage() {
         limit: pageSize,
         offset: page * pageSize,
         platform: platformFilter || undefined,
+        sort_platform: sortBy === "platform_rating" ? sortPlatform : undefined,
       });
       setSearches(data.searches);
       setTotal(data.total);
@@ -38,20 +40,11 @@ export default function HistoryPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [sortBy, order, platformFilter, page]);
+  }, [sortBy, order, platformFilter, page, sortPlatform]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  // 플랫폼별 best 찾기
-  const getBestByPlatform = (ratings: SearchHistoryItem["ratings"]) => {
-    if (!ratings || ratings.length === 0) return null;
-    const sorted = [...ratings]
-      .filter((r) => r.normalized_rating !== null)
-      .sort((a, b) => (b.normalized_rating || 0) - (a.normalized_rating || 0));
-    return sorted[0] || null;
-  };
 
   const platforms = Object.entries(PLATFORM_META);
 
@@ -81,8 +74,26 @@ export default function HistoryPage() {
               <option value="created_at">검색일</option>
               <option value="avg_rating">평균 평점</option>
               <option value="total_reviews">리뷰 수</option>
+              <option value="platform_rating">플랫폼 평점</option>
             </select>
           </div>
+
+          {sortBy === "platform_rating" && (
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-gray-600">기준 플랫폼:</label>
+              <select
+                value={sortPlatform}
+                onChange={(e) => { setSortPlatform(e.target.value); setPage(0); }}
+                className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {platforms.map(([key, meta]) => (
+                  <option key={key} value={key}>
+                    {meta.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* 정렬 순서 */}
           <button
@@ -137,7 +148,20 @@ export default function HistoryPage() {
       {!isLoading && searches.length > 0 && (
         <div className="space-y-3">
           {searches.map((search) => {
-            const best = getBestByPlatform(search.ratings);
+            const displayedRatings = platformFilter
+              ? search.ratings.filter((r) => r.platform === platformFilter)
+              : search.ratings;
+            const primaryRating = displayedRatings[0];
+            const displayAvg = platformFilter
+              ? primaryRating?.normalized_rating ?? null
+              : search.avg_rating;
+            const displayReviews = platformFilter
+              ? primaryRating?.review_count ?? 0
+              : search.total_reviews;
+            const displayPlatformCount = platformFilter
+              ? (displayedRatings.length > 0 ? 1 : 0)
+              : search.platform_count;
+
             return (
               <div
                 key={search.id}
@@ -145,7 +169,15 @@ export default function HistoryPage() {
               >
                 <div className="flex items-start justify-between mb-3">
                   <div>
-                    <h3 className="font-semibold text-lg">{search.query}</h3>
+                    <div className="flex items-center gap-3">
+                      <h3 className="font-semibold text-lg">{search.query}</h3>
+                      <Link
+                        href={`/history/${search.id}`}
+                        className="text-xs text-blue-600 hover:text-blue-800"
+                      >
+                        상세 보기
+                      </Link>
+                    </div>
                     <p className="text-xs text-gray-400 mt-1">
                       {new Date(search.created_at).toLocaleDateString("ko-KR", {
                         year: "numeric",
@@ -157,22 +189,22 @@ export default function HistoryPage() {
                     </p>
                   </div>
                   <div className="text-right">
-                    {search.avg_rating !== null && (
+                    {displayAvg !== null && (
                       <p className="text-2xl font-bold tabular-nums">
-                        {search.avg_rating.toFixed(2)}
+                        {displayAvg.toFixed(2)}
                         <span className="text-sm font-normal text-gray-400">/10</span>
                       </p>
                     )}
                     <p className="text-xs text-gray-500">
-                      {search.total_reviews.toLocaleString()}개 리뷰 · {search.platform_count}개 플랫폼
+                      {displayReviews.toLocaleString()}개 리뷰 · {displayPlatformCount}개 플랫폼
                     </p>
                   </div>
                 </div>
 
                 {/* 플랫폼별 평점 미니 뷰 */}
-                {search.ratings && search.ratings.length > 0 && (
+                {displayedRatings.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-3">
-                    {[...search.ratings]
+                    {[...displayedRatings]
                       .sort((a, b) => (b.normalized_rating || 0) - (a.normalized_rating || 0))
                       .map((r) => {
                         const meta = PLATFORM_META[r.platform] || { label: r.platform, color: "#666" };

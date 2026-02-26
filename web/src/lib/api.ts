@@ -19,6 +19,7 @@ export interface SearchResult {
     avg_rating: number | null;
     total_reviews: number;
     platform_count: number;
+    created_at?: string;
   };
   ratings: PlatformRating[];
 }
@@ -30,12 +31,21 @@ export interface PlatformInfo {
 
 export async function searchBook(
   query: string,
-  platforms?: string[]
+  platforms?: string[],
+  options?: {
+    force_refresh?: boolean;
+    include_description?: boolean;
+  }
 ): Promise<SearchResult> {
   const res = await fetch(`${API_URL}/api/search`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, platforms: platforms || null }),
+    body: JSON.stringify({
+      query,
+      platforms: platforms || null,
+      force_refresh: options?.force_refresh || false,
+      include_description: options?.include_description || false,
+    }),
   });
 
   if (!res.ok) {
@@ -160,6 +170,7 @@ export async function getSearchHistory(params?: {
   limit?: number;
   offset?: number;
   platform?: string;
+  sort_platform?: string;
 }): Promise<SearchHistoryResponse> {
   const searchParams = new URLSearchParams();
   if (params?.sort_by) searchParams.set("sort_by", params.sort_by);
@@ -167,6 +178,7 @@ export async function getSearchHistory(params?: {
   if (params?.limit) searchParams.set("limit", String(params.limit));
   if (params?.offset) searchParams.set("offset", String(params.offset));
   if (params?.platform) searchParams.set("platform", params.platform);
+  if (params?.sort_platform) searchParams.set("sort_platform", params.sort_platform);
 
   const res = await fetch(`${API_URL}/api/searches?${searchParams}`);
   if (!res.ok) throw new Error("검색 히스토리를 가져올 수 없습니다");
