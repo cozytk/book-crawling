@@ -2,10 +2,12 @@
 
 import base64
 import json
+import os
 import random
 import re
 import time
 import urllib.parse
+import urllib.request
 import cloudscraper
 from bs4 import BeautifulSoup, Tag
 
@@ -108,7 +110,7 @@ class LibraryThingCrawler(BaseHttpCrawler):
                 return str(final_url), title
         except Exception:
             pass
-        return None, ""
+        return self._search_via_brave(identifier)
 
     def search_by_keyword(self, keyword: str) -> tuple[str | None, str]:
         """제목으로 검색"""
@@ -241,7 +243,47 @@ class LibraryThingCrawler(BaseHttpCrawler):
             self._cached_rating = rating
             self._cached_review_count = review_count
             return href, title
-        
+
+        # Cloudflare 등으로 직접 크롤링이 막히는 환경(Railway)에서 Brave Search 결과 URL로 우회
+        return self._search_via_brave(keyword)
+
+    def _search_via_brave(self, keyword: str) -> tuple[str | None, str]:
+        """Brave Search API로 LibraryThing work URL 우회 검색"""
+        api_key = os.getenv("BRAVE_SEARCH_API_KEY")
+        if not api_key:
+            return None, ""
+
+        try:
+            query = f'site:librarything.com/work "{keyword}"'
+            params = urllib.parse.urlencode({"q": query, "count": 5})
+            url = f"https://api.search.brave.com/res/v1/web/search?{params}"
+
+            req = urllib.request.Request(url)
+            req.add_header("X-Subscription-Token", api_key)
+            req.add_header("Accept", "application/json")
+            req.add_header("User-Agent", self.user_agent)
+
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+
+            results = payload.get("web", {}).get("results", [])
+            for item in results:
+                work_url = str(item.get("url", ""))
+                if "librarything.com/work/" not in work_url:
+                    continue
+
+                # /t/ 이하가 붙어도 get_rating에서 다시 fetch 가능한 형태로 정규화
+                work_id_match = re.search(r"/work/\d+", work_url)
+                if work_id_match:
+                    work_url = f"{self.base_url}{work_id_match.group(0)}"
+
+                title = str(item.get("title", "")).replace(" | LibraryThing", "").strip()
+                if not title:
+                    title = keyword
+                return work_url, title
+        except Exception:
+            return None, ""
+
         return None, ""
 
     def _find_link_in_html(self, html: str | None, query: str) -> Tag | None:

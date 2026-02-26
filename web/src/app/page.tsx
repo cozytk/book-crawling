@@ -22,7 +22,10 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
   { value: "reviews_asc", label: "리뷰 적은 순" },
 ];
 
-const ALL_PLATFORMS = Object.keys(PLATFORM_META);
+const TEMP_DISABLED_PLATFORMS = new Set<string>(["librarything"]);
+const ALL_PLATFORMS = Object.keys(PLATFORM_META).filter(
+  (platform) => !TEMP_DISABLED_PLATFORMS.has(platform)
+);
 
 export default function Home() {
   const router = useRouter();
@@ -97,6 +100,7 @@ export default function Home() {
         await searchBookStream(
           query,
           (rating) => {
+            if (TEMP_DISABLED_PLATFORMS.has(rating.platform)) return;
             setRatings((prev) => [...prev, rating]);
           },
           (searchSummary, src) => {
@@ -190,7 +194,7 @@ export default function Home() {
       <div className="text-center space-y-4 py-8">
         <h1 className="text-3xl font-bold">책 평점 비교</h1>
         <p className="text-gray-500">
-          8개 플랫폼의 평점을 한번에 비교하세요
+          {ALL_PLATFORMS.length}개 플랫폼의 평점을 한번에 비교하세요
         </p>
       </div>
 
@@ -244,6 +248,9 @@ export default function Home() {
             최소 1개 플랫폼을 선택해주세요
           </p>
         )}
+        <p className="text-center text-xs text-amber-600 mt-2">
+          LibraryThing은 현재 일시적으로 비활성화되어 제외됩니다.
+        </p>
       </div>
 
       {/* 캐시 확인 배너 */}

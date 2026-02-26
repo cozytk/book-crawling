@@ -6,6 +6,7 @@ import { getSearchHistory, SearchHistoryItem, PLATFORM_META } from "@/lib/api";
 
 type SortBy = "created_at" | "avg_rating" | "total_reviews";
 type Order = "asc" | "desc";
+const TEMP_DISABLED_PLATFORMS = new Set<string>(["librarything"]);
 
 export default function HistoryPage() {
   const [searches, setSearches] = useState<SearchHistoryItem[]>([]);
@@ -53,7 +54,9 @@ export default function HistoryPage() {
     return sorted[0] || null;
   };
 
-  const platforms = Object.entries(PLATFORM_META);
+  const platforms = Object.entries(PLATFORM_META).filter(
+    ([key]) => !TEMP_DISABLED_PLATFORMS.has(key)
+  );
 
   return (
     <div className="space-y-6">
@@ -173,6 +176,7 @@ export default function HistoryPage() {
                 {search.ratings && search.ratings.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-3">
                     {[...search.ratings]
+                      .filter((r) => !TEMP_DISABLED_PLATFORMS.has(r.platform))
                       .sort((a, b) => (b.normalized_rating || 0) - (a.normalized_rating || 0))
                       .map((r) => {
                         const meta = PLATFORM_META[r.platform] || { label: r.platform, color: "#666" };
