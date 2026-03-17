@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { getSearch, searchBook, SearchResult, PLATFORM_META } from "@/lib/api";
+import BookmarkButton from "@/components/BookmarkButton";
 
 const compareNormalizedDesc = (a: SearchResult["ratings"][number], b: SearchResult["ratings"][number]) => {
   if (a.normalized_rating === null) return 1;
@@ -66,6 +67,15 @@ export default function HistoryDetailPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">검색 히스토리 상세</h1>
         <div className="flex items-center gap-3">
+          {result && result.search.id && (
+            <BookmarkButton
+              searchId={result.search.id}
+              query={result.search.query}
+              avgRating={result.search.avg_rating}
+              totalReviews={result.search.total_reviews}
+              platformCount={result.search.platform_count}
+            />
+          )}
           <button
             onClick={handleRefresh}
             disabled={!result || isUpdating}

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { getSearchHistory, SearchHistoryItem, PLATFORM_META } from "@/lib/api";
+import BookmarkButton from "@/components/BookmarkButton";
 
 type SortBy = "created_at" | "avg_rating" | "total_reviews" | "platform_rating";
 type Order = "asc" | "desc";
@@ -344,16 +345,26 @@ export default function HistoryPage() {
                       })}
                     </p>
                   </div>
-                  <div className="text-right">
-                    {displayAvg !== null && (
-                      <p className="text-2xl font-bold tabular-nums">
-                        {displayAvg.toFixed(2)}
-                        <span className="text-sm font-normal text-gray-400">/10</span>
+                  <div className="flex items-center gap-2">
+                    <div className="text-right">
+                      {displayAvg !== null && (
+                        <p className="text-2xl font-bold tabular-nums">
+                          {displayAvg.toFixed(2)}
+                          <span className="text-sm font-normal text-gray-400">/10</span>
+                        </p>
+                      )}
+                      <p className="text-xs text-gray-500">
+                        {displayReviews.toLocaleString()}개 리뷰 · {displayPlatformCount}개 플랫폼
                       </p>
-                    )}
-                    <p className="text-xs text-gray-500">
-                      {displayReviews.toLocaleString()}개 리뷰 · {displayPlatformCount}개 플랫폼
-                    </p>
+                    </div>
+                    <BookmarkButton
+                      searchId={search.id}
+                      query={search.query}
+                      avgRating={search.avg_rating}
+                      totalReviews={search.total_reviews}
+                      platformCount={search.platform_count}
+                      size="sm"
+                    />
                   </div>
                 </div>
 

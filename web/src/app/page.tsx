@@ -11,6 +11,7 @@ import {
   PlatformRating,
   PLATFORM_META,
 } from "@/lib/api";
+import BookmarkButton from "@/components/BookmarkButton";
 import ReactMarkdown from "react-markdown";
 
 type SortOption = "rating_desc" | "rating_asc" | "reviews_desc" | "reviews_asc";
@@ -315,14 +316,25 @@ export default function Home() {
       {/* 요약 (완료 시) */}
       {summary && (
         <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold mb-4">
-            &ldquo;{summary.query}&rdquo; 검색 결과
-            {source === "cache" && (
-              <span className="ml-2 text-xs font-normal text-gray-400 bg-gray-100 px-2 py-1 rounded-full">
-                캐시됨
-              </span>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">
+              &ldquo;{summary.query}&rdquo; 검색 결과
+              {source === "cache" && (
+                <span className="ml-2 text-xs font-normal text-gray-400 bg-gray-100 px-2 py-1 rounded-full">
+                  캐시됨
+                </span>
+              )}
+            </h2>
+            {summary.id && (
+              <BookmarkButton
+                searchId={summary.id}
+                query={summary.query}
+                avgRating={summary.avg_rating}
+                totalReviews={summary.total_reviews}
+                platformCount={summary.platform_count}
+              />
             )}
-          </h2>
+          </div>
           <div className="flex gap-8 text-sm">
             {summary.avg_rating !== null && (
               <div>

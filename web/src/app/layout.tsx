@@ -24,7 +24,13 @@ export default function RootLayout({
                 책 평점 비교
               </span>
             </div>
-            <nav>
+            <nav className="flex items-center gap-4">
+              <a
+                href="/bookmarks"
+                className="text-sm text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                읽을 책
+              </a>
               <a
                 href="/history"
                 className="text-sm text-gray-600 hover:text-gray-900 transition-colors"
