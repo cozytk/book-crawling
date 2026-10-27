@@ -7,6 +7,7 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
+from .utils import title_score
 
 
 class SarakCrawler(BaseHttpCrawler):
@@ -58,6 +59,7 @@ class SarakCrawler(BaseHttpCrawler):
         keyword_lower = keyword.lower()
         best_product_id = None
         best_title = ""
+        best_score = 0.0
 
         for link in soup.select("a.gd_name"):
             href = link.get("href", "")
@@ -76,15 +78,11 @@ class SarakCrawler(BaseHttpCrawler):
                 continue
 
             # 첫 번째 유효한 결과 저장
-            if best_product_id is None:
+            score = title_score(keyword, text)
+            if score > best_score:
+                best_score = score
                 best_product_id = product_id
                 best_title = text
-
-            # 검색어가 제목에 포함된 경우 우선
-            if keyword_lower in text.lower():
-                best_product_id = product_id
-                best_title = text
-                break
 
         if not best_product_id:
             return None, ""

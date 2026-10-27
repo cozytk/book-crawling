@@ -4,6 +4,7 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
+from .utils import title_score, is_isbn, clean_isbn
 
 
 class Yes24Crawler(BaseHttpCrawler):
@@ -29,6 +30,7 @@ class Yes24Crawler(BaseHttpCrawler):
         keyword_lower = keyword.lower()
         best_url = None
         best_title = ""
+        best_score = 0.0
 
         for link in soup.select("a.gd_name"):
             href = link.get("href", "")
@@ -42,16 +44,13 @@ class Yes24Crawler(BaseHttpCrawler):
             if "/product/goods/" not in href.lower():
                 continue
 
-            # 첫 번째 유효한 결과 저장
-            if best_url is None:
+            score = title_score(keyword, text)
+            if is_isbn(keyword):
+                score = 1.0 if clean_isbn(keyword) in re.sub(r"[\s-]", "", str(link.parent)) else 0.0
+            if score > best_score:
+                best_score = score
                 best_url = href
                 best_title = text
-
-            # 검색어가 제목에 포함된 경우 우선
-            if keyword_lower in text.lower():
-                best_url = href
-                best_title = text
-                break
 
         if not best_url:
             return None, ""
@@ -85,7 +84,10 @@ class Yes24Crawler(BaseHttpCrawler):
             if rating_elem:
                 rating_text = rating_elem.get_text(strip=True)
                 try:
-                    rating = float(rating_text)
+                    value = float(rating_text)
+                    if not 0 <= value <= self.rating_scale:
+                        continue
+                    rating = value
                     self.logger.parse_result(selector, rating)
                     break
                 except ValueError:

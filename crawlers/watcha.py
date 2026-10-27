@@ -6,6 +6,7 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
+from .utils import title_score
 
 
 class WatchaCrawler(BaseHttpCrawler):
@@ -24,7 +25,7 @@ class WatchaCrawler(BaseHttpCrawler):
     def search_by_keyword(self, keyword: str) -> tuple[str | None, str]:
         """책 검색 후 가장 관련 있는 결과의 상세 페이지 URL 반환"""
         encoded_query = urllib.parse.quote(keyword)
-        search_url = f"{self.base_url}/ko-KR/searches/books?query={encoded_query}"
+        search_url = f"{self.base_url}/ko/searches?query={encoded_query}&category=books"
 
         try:
             html = self._fetch_html(search_url)
@@ -34,12 +35,14 @@ class WatchaCrawler(BaseHttpCrawler):
         soup = BeautifulSoup(html, "html.parser")
 
         # /ko-KR/contents/{ID} 패턴의 링크 찾기
-        book_links = soup.find_all("a", href=re.compile(r"/ko-KR/contents/[a-zA-Z0-9]+"))
+        book_links = soup.find_all("a", href=re.compile(r"/(?:ko-KR|ko)/contents/[a-zA-Z0-9]+"))
 
         if not book_links:
             return None, ""
 
-        first_link = book_links[0]
+        first_link = max(book_links, key=lambda link: title_score(keyword, link.get_text(strip=True)))
+        if not title_score(keyword, first_link.get_text(strip=True)):
+            return None, ""
         href = first_link.get("href")
 
         if not href:

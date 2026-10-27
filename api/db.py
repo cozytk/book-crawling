@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from supabase import create_client, Client
+from api.local_store import LocalStore
 
 CACHE_TTL_HOURS = 24
 
@@ -15,9 +16,18 @@ def get_client() -> Client:
     """Supabase 클라이언트 생성 (싱글톤)"""
     global _client_cache
     if _client_cache is None:
-        url = os.environ["SUPABASE_URL"]
-        key = os.environ["SUPABASE_KEY"]
-        _client_cache = create_client(url, key)
+        local_path = os.environ.get("BOOK_CRAWLER_DB")
+        if local_path:
+            _client_cache = LocalStore(local_path)
+            return _client_cache
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_KEY")
+        if url and key:
+            _client_cache = create_client(url, key)
+        elif url or key:
+            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set together")
+        else:
+            _client_cache = LocalStore(os.environ.get("BOOK_CRAWLER_DB", "data/searches.sqlite3"))
     return _client_cache
 
 
@@ -29,6 +39,8 @@ def find_cached_search(client: Client, query: str) -> dict | None:
         {"search": {...}, "ratings": [...]} or None
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=CACHE_TTL_HOURS)).isoformat()
+    if isinstance(client, LocalStore):
+        return client.cached(query, cutoff)
 
     result = (
         client.table("searches")
@@ -54,7 +66,7 @@ def find_cached_search(client: Client, query: str) -> dict | None:
     return {"search": search, "ratings": ratings.data}
 
 
-def save_search_result(client: Client, query: str, results: list[dict]) -> dict:
+def save_search_result(client: Client, query: str, results: list[dict], platforms: list[str] | None = None) -> dict:
     """
     검색 결과를 Supabase에 저장
 
@@ -65,8 +77,10 @@ def save_search_result(client: Client, query: str, results: list[dict]) -> dict:
     Returns:
         저장된 search 레코드
     """
+    if isinstance(client, LocalStore):
+        return client.save(query, results, platforms)
     # 평균 평점 계산
-    ratings = [r["normalized_rating"] for r in results if r.get("normalized_rating")]
+    ratings = [r["normalized_rating"] for r in results if r.get("normalized_rating") is not None]
     avg_rating = sum(ratings) / len(ratings) if ratings else None
     total_reviews = sum(r.get("review_count", 0) for r in results)
 
@@ -120,6 +134,8 @@ def get_all_searches(
     Returns:
         {"searches": [...], "total": int}
     """
+    if isinstance(client, LocalStore):
+        return client.history(sort_by, order, limit, offset, platform, sort_platform, with_count)
     # 허용된 정렬 필드
     allowed_sort = {
         "created_at",
@@ -229,3 +245,20 @@ def get_all_searches(
         s["ratings"] = ratings_map.get(s["id"], [])
 
     return {"searches": searches, "total": total}
+
+
+def summarize(results: list[dict]) -> dict:
+    ratings = [r["normalized_rating"] for r in results if r.get("normalized_rating") is not None]
+    return {"avg_rating": round(sum(ratings) / len(ratings), 2) if ratings else None,
+            "total_reviews": sum(r.get("review_count", 0) for r in results),
+            "platform_count": len(results)}
+
+
+def get_saved_search(client, search_id: str):
+    if isinstance(client, LocalStore):
+        return client.get(search_id)
+    search = client.table("searches").select("*").eq("id", search_id).limit(1).execute()
+    if not search.data:
+        return None
+    ratings = client.table("platform_ratings").select("*").eq("search_id", search_id).execute()
+    return {"search": search.data[0], "ratings": ratings.data}

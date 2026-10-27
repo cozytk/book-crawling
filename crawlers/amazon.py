@@ -8,7 +8,7 @@ import urllib.request
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import is_isbn
+from .utils import is_isbn, title_score
 
 
 class AmazonCrawler(BaseHttpCrawler):
@@ -41,7 +41,7 @@ class AmazonCrawler(BaseHttpCrawler):
             "User-Agent": self.user_agent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Encoding": "gzip",
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
             "Sec-Fetch-Dest": "document",
@@ -130,7 +130,9 @@ class AmazonCrawler(BaseHttpCrawler):
 
         # 검색 결과에서 첫 번째 책 찾기
         # 방법 1: data-asin 속성이 있는 검색 결과
-        for result in soup.select('[data-component-type="s-search-result"]'):
+        candidates = soup.select('[data-component-type="s-search-result"]')
+        candidates.sort(key=lambda result: title_score(keyword, result.select_one("h2").get_text(strip=True) if result.select_one("h2") else ""), reverse=True)
+        for result in candidates:
             asin = result.get("data-asin", "")
             if not asin:
                 continue
@@ -143,6 +145,8 @@ class AmazonCrawler(BaseHttpCrawler):
                 continue
 
             title = title_elem.get_text(strip=True)
+            if not title_score(keyword, title):
+                continue
             book_url = f"https://www.amazon.com/dp/{asin}"
 
             # 검색 결과에서 평점 미리 추출 (가능한 경우)
@@ -171,7 +175,7 @@ class AmazonCrawler(BaseHttpCrawler):
             if match:
                 asin = match.group(1)
                 title = link.get_text(strip=True)
-                if title and len(title) > 5:  # 너무 짧은 텍스트 제외
+                if title_score(keyword, title):
                     return f"https://www.amazon.com/dp/{asin}", title
 
         return None, ""

@@ -34,6 +34,7 @@ export default function Home() {
     avg_rating: number | null;
     total_reviews: number;
     platform_count: number;
+    missing_platforms?: string[];
   } | null>(null);
   const [source, setSource] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -132,7 +133,7 @@ export default function Home() {
     async (query: string) => {
       // First check cache
       try {
-        const cacheResult = await checkCache(query);
+        const cacheResult = await checkCache(query, Array.from(enabledPlatforms));
         if (cacheResult.cached && cacheResult.search) {
           setCachePrompt({ query, search: cacheResult.search as Record<string, unknown> });
           return;
@@ -143,7 +144,7 @@ export default function Home() {
 
       executeSearch(query);
     },
-    [executeSearch]
+    [executeSearch, enabledPlatforms]
   );
 
   const handleUseCached = useCallback(() => {
@@ -314,6 +315,12 @@ export default function Home() {
       {isLoading && ratings.length === 0 && <LoadingSkeleton />}
 
       {/* 요약 (완료 시) */}
+      {summary?.missing_platforms && summary.missing_platforms.length > 0 && (
+        <p className="text-sm text-gray-600" role="status">
+          결과를 수집하지 못한 곳: {summary.missing_platforms.map((p) => PLATFORM_META[p]?.label || p).join(", ")}.
+          검색 결과가 없거나 사이트 접근 제한·원서 연결 실패로 수집하지 못했을 수 있습니다.
+        </p>
+      )}
       {summary && (
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <div className="flex items-center justify-between mb-4">
