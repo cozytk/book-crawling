@@ -8,6 +8,7 @@ import urllib.parse
 import urllib.request
 
 from .base_http import BaseHttpCrawler
+from .utils import title_score, is_isbn, clean_isbn
 from models.book import PlatformRating
 
 
@@ -38,7 +39,7 @@ class AladinCrawler(BaseHttpCrawler):
         params["Version"] = "20131101"
 
         query_string = urllib.parse.urlencode(params)
-        url = f"http://www.aladin.co.kr/ttb/api/{endpoint}?{query_string}"
+        url = f"https://www.aladin.co.kr/ttb/api/{endpoint}?{query_string}"
 
         start = time.perf_counter()
         try:
@@ -83,7 +84,13 @@ class AladinCrawler(BaseHttpCrawler):
             "SearchTarget": "Book",
         }
 
-        result = self._api_request("ItemSearch.aspx", params)
+        if is_isbn(query):
+            result = self._api_request("ItemLookUp.aspx", {
+                "ItemId": clean_isbn(query),
+                "itemIdType": "ISBN13" if len(clean_isbn(query)) == 13 else "ISBN",
+            })
+        else:
+            result = self._api_request("ItemSearch.aspx", params)
         if not result or not result.get("item"):
             self.logger.search_complete(
                 query, found=False, method="api",
@@ -106,12 +113,17 @@ class AladinCrawler(BaseHttpCrawler):
 
         for item in result["item"]:
             title = item.get("title", "")
+            relevance = title_score(query, title)
+            if is_isbn(query):
+                relevance = 1.0 if clean_isbn(query) in (item.get("isbn"), item.get("isbn13")) else 0.0
+            if not relevance:
+                continue
             title_norm = normalize(title)
             sales_point = float(item.get("salesPoint", 0))
 
             # 1. 제목 유사도 점수 (0~1)
             similarity = difflib.SequenceMatcher(None, query_norm, title_norm).ratio()
-            score = similarity * 100
+            score = relevance * 1000
 
             # 2. 완전 일치 / 주제목 일치 / 권수 매칭 보너스
             # 주제목 추출 (콜론이나 대시 앞부분)
@@ -157,7 +169,7 @@ class AladinCrawler(BaseHttpCrawler):
             )
             return None, ""
 
-        book_url = best_item.get("link", "")
+        book_url = html.unescape(best_item.get("link", ""))
         publisher = best_item.get("publisher", "")
         book_title = best_item.get("title", "")
         if publisher:
@@ -273,12 +285,8 @@ class AladinCrawler(BaseHttpCrawler):
                 # 번역서가 아닌 한국 원서 → 해외 플랫폼 검색 불필요
                 return None
             # 번역서인 경우 → 알라딘 해외도서에서 저자명으로 원서 검색
-            if author_name:
-                self.logger.debug(f"번역서 감지: {author_name} → 해외도서 검색")
-                foreign = self._search_foreign_edition(author_name)
-                if foreign:
-                    original_title = foreign["title"]
-                    isbn13 = foreign.get("isbn13") or isbn13
+            # An author's first foreign book is not evidence of this work.
+            # Keep the Korean ISBN so Open Library can follow Edition -> Work.
 
         if not original_title and not isbn13:
             return None

@@ -10,10 +10,12 @@
 """
 
 from dataclasses import dataclass
+import asyncio
 
 from crawler_logging import CrawlerLogger
 from crawlers.aladin import AladinCrawler
 from crawlers.isbn_lookup import ISBNLookup
+from crawlers.utils import is_isbn, clean_isbn
 
 logger = CrawlerLogger("foreign_resolver")
 
@@ -32,7 +34,7 @@ class ForeignQuery:
     @property
     def available(self) -> bool:
         """해외 플랫폼 검색 가능 여부"""
-        return self.query is not None
+        return self.query is not None or self.isbn is not None
 
 
 def _is_korean(text: str) -> bool:
@@ -48,6 +50,11 @@ async def _get_original_info(query: str) -> dict | None:
 
 
 async def resolve_foreign_query(korean_query: str) -> ForeignQuery:
+    # Providers use blocking HTTP. Isolate them from the ASGI event loop.
+    return await asyncio.to_thread(lambda: asyncio.run(_resolve_foreign_query(korean_query)))
+
+
+async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
     """
     한국어 검색어를 해외 플랫폼 검색 정보로 변환
 
@@ -57,6 +64,9 @@ async def resolve_foreign_query(korean_query: str) -> ForeignQuery:
     Returns:
         ForeignQuery (query=None이면 해외 플랫폼 검색 불가)
     """
+    if is_isbn(korean_query):
+        isbn = clean_isbn(korean_query)
+        return ForeignQuery(query=isbn, isbn=isbn)
     if not _is_korean(korean_query):
         # 영문 검색어도 ISBN을 찾아두면 해외 플랫폼(특히 LibraryThing) 정확도가 올라감
         lookup = ISBNLookup()
@@ -88,7 +98,7 @@ async def resolve_foreign_query(korean_query: str) -> ForeignQuery:
         original = lookup.find_original(isbn=isbn13, korean_title=korean_query)
         if original:
             authors = original.get("authors", [])
-            query = f"{original['title']} {authors[0]}" if authors else original["title"]
+            query = original["title"]
             isbn = original.get("isbn") or lookup.get_isbn(original["title"])
             if isbn:
                 logger.debug(f"원서 연결: {query} → ISBN {isbn}")

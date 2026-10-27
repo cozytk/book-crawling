@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from .utils import title_score
 
 
 @dataclass
@@ -149,7 +150,7 @@ class GoogleBooksProvider(ISBNProvider):
                 if title.lower() in item_title.lower() or item_title.lower() in title.lower():
                     similarity = max(similarity, 0.8)
 
-                if similarity < 0.6: # 조금 더 완화
+                if not title_score(title, item_title):
                     continue
 
                 isbn = self._extract_isbn(info.get("industryIdentifiers", []))
@@ -201,11 +202,7 @@ class GoogleBooksProvider(ISBNProvider):
                     }
                 return None
 
-            # 아시아 언어 → 저자명으로 영어판 검색
-            for author in authors:
-                result = self._find_english_edition_by_author(author)
-                if result:
-                    return result
+            # Author-only search cannot establish the identity of a translation.
             return None
 
         except Exception:
@@ -279,7 +276,7 @@ class OpenLibraryProvider(ISBNProvider):
     def search(self, title: str, author: str | None = None) -> ISBNResult | None:
         query = self._build_query(title, author)
         encoded = urllib.parse.quote(query)
-        url = f"{self.base_url}?q={encoded}&limit=5"
+        url = f"{self.base_url}?q={encoded}&limit=5&fields=title,author_name,isbn"
 
         try:
             data = self._api_get(url)
@@ -292,6 +289,8 @@ class OpenLibraryProvider(ISBNProvider):
 
             # 첫 번째 결과에서 ISBN 추출
             for doc in docs:
+                if not title_score(title, doc.get("title", "")):
+                    continue
                 isbn_list = doc.get("isbn", [])
                 if isbn_list:
                     # ISBN-13 우선 (13자리)
@@ -527,16 +526,6 @@ class ISBNLookup:
                     result = provider.find_original_by_korean_title(korean_title)
                     if result:
                         return result
-
-        # 방법 3: Yes24에서 로마자 저자명 추출 → Google Books 영어판 검색
-        if korean_title:
-            romanized_author = _scrape_yes24_original_author(korean_title)
-            if romanized_author:
-                for provider in self.providers:
-                    if hasattr(provider, "find_original_by_romanized_author"):
-                        result = provider.find_original_by_romanized_author(romanized_author)
-                        if result:
-                            return result
 
         return None
 

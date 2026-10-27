@@ -1,199 +1,69 @@
-"""기존 크롤러를 래핑하는 서비스 레이어"""
-
+"""Concurrent platform searches shared by JSON and SSE endpoints."""
 import asyncio
 import uuid
-import sys
-import os
-
-# 프로젝트 루트를 Python 경로에 추가 (api/ 하위에서 crawlers/ 접근)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-
 from crawler_logging import CrawlerLogger
-from crawlers import (
-    AladinCrawler,
-    KyoboCrawler,
-    Yes24Crawler,
-    SarakCrawler,
-    WatchaCrawler,
-    GoodreadsCrawler,
-    AmazonCrawler,
-    LibraryThingCrawler,
-)
-from crawlers.base import BaseCrawler
-from crawlers.foreign_resolver import resolve_foreign_query, ForeignQuery
-from models.book import BookSearchResult, PlatformRating
+from crawlers import AladinCrawler, KyoboCrawler, Yes24Crawler, SarakCrawler, WatchaCrawler, GoodreadsCrawler, AmazonCrawler, LibraryThingCrawler
+from crawlers.foreign_resolver import resolve_foreign_query
+from models.book import BookSearchResult
 
-# 크롤러 레지스트리
-CRAWLERS: dict[str, type[BaseCrawler]] = {
-    "aladin": AladinCrawler,
-    "kyobo": KyoboCrawler,
-    "yes24": Yes24Crawler,
-    "sarak": SarakCrawler,
-    "watcha": WatchaCrawler,
-    "goodreads": GoodreadsCrawler,
-    "amazon": AmazonCrawler,
-    "librarything": LibraryThingCrawler,
-}
-
+CRAWLERS = {"aladin": AladinCrawler, "kyobo": KyoboCrawler, "yes24": Yes24Crawler, "sarak": SarakCrawler, "watcha": WatchaCrawler, "goodreads": GoodreadsCrawler, "amazon": AmazonCrawler, "librarything": LibraryThingCrawler}
 FOREIGN_PLATFORMS = {"goodreads", "amazon", "librarything"}
-
 logger = CrawlerLogger("api")
 
 
-async def crawl_platform(
-    crawler_cls: type[BaseCrawler],
-    query: str,
-    fallback_query: str | None = None,
-    original_query: str | None = None,
-    execution_id: str | None = None,
-) -> PlatformRating | None:
-    """단일 플랫폼 크롤링 (스레드 기반 병렬 실행)"""
-    session_id = uuid.uuid4().hex[:8]
-    orig = original_query or query
-
-    async def _execute():
+async def crawl_platform(crawler_cls, query, fallback_query=None, original_query=None, execution_id=None):
+    async def execute():
         async with crawler_cls() as crawler:
-            crawler.set_session(session_id, orig, execution_id=execution_id)
+            crawler.set_session(uuid.uuid4().hex[:8], original_query or query, execution_id=execution_id)
             result = await crawler.crawl(query, attempt=1)
             if result is None and fallback_query and fallback_query != query:
                 result = await crawler.crawl(fallback_query, attempt=2)
             return result
+    return await asyncio.to_thread(lambda: asyncio.run(execute()))
 
-    return await asyncio.to_thread(lambda: asyncio.run(_execute()))
 
-
-async def crawl_all(
-    query: str, platforms: list[str] | None = None
-) -> BookSearchResult:
-    """
-    여러 플랫폼에서 병렬 크롤링
-
-    main.py의 crawl_all_platforms()와 동일한 로직.
-    """
+async def _platform_results(query, platforms=None):
+    selected = list(dict.fromkeys(platforms if platforms is not None else CRAWLERS))
     execution_id = uuid.uuid4().hex[:8]
-    logger.set_execution_id(execution_id)
+    foreign_task = asyncio.create_task(resolve_foreign_query(query)) if any(p in FOREIGN_PLATFORMS for p in selected) else None
 
-    if platforms is None:
-        platforms = list(CRAWLERS.keys())
+    async def run(platform):
+        try:
+            if platform in FOREIGN_PLATFORMS:
+                foreign = await foreign_task
+                if not foreign.available and not foreign.isbn:
+                    return None
+                return await crawl_platform(CRAWLERS[platform], foreign.isbn or foreign.query, foreign.query if foreign.isbn else None, original_query=query, execution_id=execution_id)
+            return await crawl_platform(CRAWLERS[platform], query, original_query=query, execution_id=execution_id)
+        except Exception as exc:
+            logger.error("crawl_failed", str(exc), {"platform": platform})
+            return None
 
-    valid_platforms = [p for p in platforms if p in CRAWLERS]
-    if not valid_platforms:
-        return BookSearchResult(query=query)
-
-    # 해외 플랫폼 검색어 해석
-    foreign = ForeignQuery()
-    has_foreign = any(p in FOREIGN_PLATFORMS for p in valid_platforms)
-    if has_foreign:
-        foreign = await resolve_foreign_query(query)
-
-    # 태스크 생성
-    tasks = []
-    task_platforms = []
-    for p in valid_platforms:
-        if p in FOREIGN_PLATFORMS:
-            if foreign.isbn:
-                tasks.append(crawl_platform(
-                    CRAWLERS[p], foreign.isbn, foreign.query,
-                    original_query=query, execution_id=execution_id
-                ))
-                task_platforms.append(p)
-            elif foreign.query:
-                tasks.append(crawl_platform(
-                    CRAWLERS[p], foreign.query,
-                    original_query=query, execution_id=execution_id
-                ))
-                task_platforms.append(p)
-        else:
-            tasks.append(crawl_platform(
-                CRAWLERS[p], query,
-                original_query=query, execution_id=execution_id
-            ))
-            task_platforms.append(p)
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    search_result = BookSearchResult(query=query)
-    for platform, result in zip(task_platforms, results):
-        if isinstance(result, Exception):
-            logger.error("crawl_failed", str(result), {"platform": platform})
-        elif result is not None:
-            search_result.add_result(result)
-
-    return search_result
+    tasks = [asyncio.create_task(run(p)) for p in selected if p in CRAWLERS]
+    try:
+        for task in asyncio.as_completed(tasks):
+            result = await task
+            if result is not None:
+                yield result
+    finally:
+        pending = tasks + ([foreign_task] if foreign_task else [])
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
-async def crawl_all_stream(
-    query: str, platforms: list[str] | None = None
-):
-    """
-    여러 플랫폼에서 병렬 크롤링 - 결과를 하나씩 yield
-
-    Yields:
-        dict: 각 플랫폼 결과 (PlatformRating.to_dict() 형태)
-    """
-    execution_id = uuid.uuid4().hex[:8]
-    logger.set_execution_id(execution_id)
-
-    if platforms is None:
-        platforms = list(CRAWLERS.keys())
-
-    valid_platforms = [p for p in platforms if p in CRAWLERS]
-    if not valid_platforms:
-        return
-
-    # 해외 플랫폼 검색어 해석
-    foreign = ForeignQuery()
-    has_foreign = any(p in FOREIGN_PLATFORMS for p in valid_platforms)
-    if has_foreign:
-        foreign = await resolve_foreign_query(query)
-
-    # 태스크 생성
-    pending = set()
-    for p in valid_platforms:
-        if p in FOREIGN_PLATFORMS:
-            if foreign.isbn:
-                task = asyncio.create_task(crawl_platform(
-                    CRAWLERS[p], foreign.isbn, foreign.query,
-                    original_query=query, execution_id=execution_id
-                ))
-                pending.add(task)
-            elif foreign.query:
-                task = asyncio.create_task(crawl_platform(
-                    CRAWLERS[p], foreign.query,
-                    original_query=query, execution_id=execution_id
-                ))
-                pending.add(task)
-        else:
-            task = asyncio.create_task(crawl_platform(
-                CRAWLERS[p], query,
-                original_query=query, execution_id=execution_id
-            ))
-            pending.add(task)
-
-    # 완료되는 순서대로 yield
-    while pending:
-        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            try:
-                result = task.result()
-                if result is not None:
-                    yield {
-                        "platform": result.platform,
-                        "rating": result.rating,
-                        "rating_scale": result.rating_scale,
-                        "normalized_rating": result.normalized_rating,
-                        "review_count": result.review_count,
-                        "book_title": result.book_title,
-                        "url": result.url,
-                        "crawled_at": result.crawled_at.isoformat(),
-                    }
-            except Exception as e:
-                logger.error("crawl_failed", str(e))
+async def crawl_all(query, platforms=None):
+    result = BookSearchResult(query=query)
+    async for rating in _platform_results(query, platforms):
+        result.add_result(rating)
+    return result
 
 
-def get_available_platforms() -> list[dict]:
-    """사용 가능한 플랫폼 목록"""
-    return [
-        {"name": name, "type": "foreign" if name in FOREIGN_PLATFORMS else "domestic"}
-        for name in CRAWLERS
-    ]
+async def crawl_all_stream(query, platforms=None):
+    async for rating in _platform_results(query, platforms):
+        yield BookSearchResult(query=query, results=[rating]).to_dict()["results"][0]
+
+
+def get_available_platforms():
+    return [{"name": name, "type": "foreign" if name in FOREIGN_PLATFORMS else "domestic"} for name in CRAWLERS]

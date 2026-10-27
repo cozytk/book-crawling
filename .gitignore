@@ -12,3 +12,7 @@ web/.next/
 web/out/
 .vercel
 .gcloudignore
+data/
+artifacts/
+web/.env.production
+web/*.tsbuildinfo

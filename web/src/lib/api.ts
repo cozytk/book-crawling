@@ -1,3 +1,5 @@
+import { SSEParser } from "./sse";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export interface PlatformRating {
@@ -19,6 +21,7 @@ export interface SearchResult {
     avg_rating: number | null;
     total_reviews: number;
     platform_count: number;
+    missing_platforms?: string[];
     created_at?: string;
   };
   ratings: PlatformRating[];
@@ -75,9 +78,11 @@ export interface CacheCheckResult {
   search?: SearchResult["search"];
 }
 
-export async function checkCache(query: string): Promise<CacheCheckResult> {
+export async function checkCache(query: string, platforms?: string[]): Promise<CacheCheckResult> {
+  const params = new URLSearchParams({ query });
+  platforms?.forEach((platform) => params.append("platforms", platform));
   const res = await fetch(
-    `${API_URL}/api/search/check?query=${encodeURIComponent(query)}`
+    `${API_URL}/api/search/check?${params}`
   );
   if (!res.ok) {
     return { cached: false };
@@ -102,6 +107,7 @@ export async function searchBookStream(
       query,
       platforms: platforms || null,
       force_refresh: forceRefresh || false,
+      include_description: Boolean(onDescription),
     }),
   });
 
@@ -114,37 +120,33 @@ export async function searchBookStream(
   if (!reader) throw new Error("ReadableStream not supported");
 
   const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    let eventType = "message";
-    for (const line of lines) {
-      if (line.startsWith("event: ")) {
-        eventType = line.slice(7).trim();
-      } else if (line.startsWith("data: ")) {
-        const data = line.slice(6);
-        try {
-          const parsed = JSON.parse(data);
-          if (eventType === "done") {
-            onDone(parsed.search, parsed.source);
-          } else if (eventType === "description_chunk") {
-            onDescription?.(parsed.chunk);
-          } else {
-            onResult(parsed as PlatformRating);
-          }
-        } catch {
-          // skip invalid JSON
-        }
-        eventType = "message";
-      }
+  let completed = false;
+  let failed = false;
+  const parser = new SSEParser((event, data) => {
+    const parsed = JSON.parse(data);
+    if (event === "done") {
+      completed = true;
+      if (!failed) onDone(parsed.search, parsed.source);
+    } else if (event === "error") {
+      failed = true;
+      onError(parsed.message || "검색 중 오류가 발생했습니다");
+    } else if (event === "description_chunk") {
+      onDescription?.(parsed.chunk);
+    } else if (event === "rating" || event === "message") {
+      onResult(parsed as PlatformRating);
     }
+  });
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parser.push(decoder.decode(value, { stream: true }));
+    }
+    parser.push(decoder.decode());
+    if (!completed) throw new Error("검색 연결이 끊어졌습니다. 다시 검색해주세요.");
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 }
 

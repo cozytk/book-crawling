@@ -8,6 +8,7 @@ import urllib.request
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
+from .utils import title_score, is_isbn, clean_isbn
 
 
 class KyoboCrawler(BaseHttpCrawler):
@@ -50,6 +51,9 @@ class KyoboCrawler(BaseHttpCrawler):
         keyword_words = [w for w in keyword_lower.split() if len(w) > 1]
         best_title = ""
         best_url = ""
+        best_score = 0.0
+        self._search_rating = None
+        self._search_review_count = 0
 
         for item in items:
             # 책 제목 및 URL 추출
@@ -78,20 +82,21 @@ class KyoboCrawler(BaseHttpCrawler):
             if any(kw in book_name for kw in exclude_keywords):
                 continue
 
-            # 첫 번째 유효한 결과 저장
-            if not best_url:
+            score = title_score(keyword, book_name)
+            if is_isbn(keyword):
+                score = 1.0 if clean_isbn(keyword) in re.sub(r"[\s-]", "", str(item)) else 0.0
+            if score > best_score:
+                best_score = score
                 best_title = book_name
                 best_url = book_url
-
-            # 검색어 매칭
-            title_lower = book_name.lower().replace(" ", "")
-            keyword_normalized = keyword_lower.replace(" ", "")
-
-            if keyword_normalized in title_lower:
-                return book_url, book_name
-
-            if all(word in title_lower for word in keyword_words):
-                return book_url, book_name
+                score_elem = item.select_one(".review_klover_text, .review_score")
+                count_elem = item.select_one(".review_desc")
+                try:
+                    self._search_rating = float(score_elem.get_text(strip=True)) if score_elem else None
+                except ValueError:
+                    self._search_rating = None
+                count = re.search(r"[\d,]+", count_elem.get_text()) if count_elem else None
+                self._search_review_count = int(count.group().replace(",", "")) if count else 0
 
         return (best_url, best_title) if best_url else (None, "")
 
@@ -128,6 +133,11 @@ class KyoboCrawler(BaseHttpCrawler):
 
         rating = None
         review_count = 0
+
+        if getattr(self, "_search_rating", None) is not None:
+            rating = self._search_rating
+            if 0 < rating <= 10:
+                return rating, self._search_review_count
 
         # 1. 평점 조회 (statistics API)
         stats_data = self._fetch_api(f"{self.stats_api_url}?saleCmdtid={product_id}")

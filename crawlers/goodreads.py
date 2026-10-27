@@ -8,7 +8,7 @@ import urllib.request
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import is_isbn
+from .utils import is_isbn, title_score
 
 
 class GoodreadsCrawler(BaseHttpCrawler):
@@ -129,7 +129,7 @@ class GoodreadsCrawler(BaseHttpCrawler):
         # 검색 결과가 상세 페이지로 리다이렉트된 경우 (정확한 매칭)
         if "/book/show/" in final_url:
             book_title, rating, review_count = self._parse_detail_page(html)
-            if book_title:
+            if book_title and title_score(keyword, book_title):
                 self._cached_rating = rating
                 self._cached_review_count = review_count
                 return final_url, book_title
@@ -139,23 +139,16 @@ class GoodreadsCrawler(BaseHttpCrawler):
         soup = BeautifulSoup(html, "html.parser")
 
         # 검색 결과 테이블에서 책 링크 찾기
-        book_link = soup.select_one("a.bookTitle")
+        links = soup.select("a.bookTitle") or soup.select('a[href*="/book/show/"]')
+        book_link = max(links, key=lambda link: title_score(keyword, link.get_text(strip=True)), default=None)
+        if book_link and not title_score(keyword, book_link.get_text(strip=True)):
+            book_link = None
         if book_link:
             book_url = book_link.get("href", "")
             if book_url and not book_url.startswith("http"):
                 book_url = f"https://www.goodreads.com{book_url}"
             book_title = book_link.get_text(strip=True)
             return book_url, book_title
-
-        # 대체 셀렉터 시도
-        book_link = soup.select_one('a[href*="/book/show/"]')
-        if book_link:
-            book_url = book_link.get("href", "")
-            if book_url and not book_url.startswith("http"):
-                book_url = f"https://www.goodreads.com{book_url}"
-            book_title = book_link.get_text(strip=True)
-            if book_title:
-                return book_url, book_title
 
         return None, ""
 

@@ -1,359 +1,185 @@
-"""검색 API 라우트"""
-
+"""Book search, streaming results, and saved history."""
 import asyncio
 import json
 from uuid import UUID
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-
-from api.db import get_client, find_cached_search, save_search_result, get_all_searches
-from api.services.crawler_service import crawl_all, get_available_platforms
+from pydantic import BaseModel, Field, field_validator, ValidationError
+from api.db import get_client, find_cached_search, save_search_result, get_all_searches, get_saved_search, summarize
+from api.services.crawler_service import CRAWLERS, crawl_all, crawl_all_stream, get_available_platforms
 from api.services.ai_service import generate_book_description, generate_book_description_stream
 
 router = APIRouter()
 
 
 class SearchRequest(BaseModel):
-    query: str
+    query: str = Field(max_length=300)
     platforms: list[str] | None = None
     include_description: bool = False
     force_refresh: bool = False
 
+    @field_validator("query")
+    @classmethod
+    def clean_query(cls, value):
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("검색어를 입력해주세요")
+        return value
 
-class PlatformInfo(BaseModel):
-    name: str
-    type: str
+    @field_validator("platforms")
+    @classmethod
+    def validate_platforms(cls, value):
+        if value is not None:
+            if not value or any(p not in CRAWLERS for p in value):
+                raise ValueError("지원하는 플랫폼을 하나 이상 선택해주세요")
+            return list(dict.fromkeys(value))
+        return value
+
+
+def cached_for(client, query, platforms=None):
+    cached = find_cached_search(client, query)
+    if not cached:
+        return None
+    selected = set(platforms if platforms is not None else CRAWLERS)
+    found = {r["platform"] for r in cached["ratings"]}
+    covered = set(cached["search"].get("requested_platforms", found))
+    if not selected.issubset(covered):
+        return None
+    ratings = [r for r in cached["ratings"] if r["platform"] in selected]
+    return {"search": {**cached["search"], **summarize(ratings)}, "ratings": ratings}
+
+
+async def lookup(req):
+    try:
+        client = await asyncio.to_thread(get_client)
+        cached = None if req.force_refresh else await asyncio.to_thread(cached_for, client, req.query, req.platforms)
+        return client, cached
+    except Exception:
+        return None, None
+
+
+async def persist(client, query, results, platforms=None):
+    if client and results:
+        try:
+            return await asyncio.to_thread(save_search_result, client, query, results, list(platforms if platforms is not None else CRAWLERS))
+        except Exception:
+            pass
+    return {"id": None, "query": query, **summarize(results)}
+
+
+def with_coverage(search, ratings, platforms):
+    found = {r["platform"] for r in ratings}
+    selected = platforms if platforms is not None else CRAWLERS
+    return {**search, "missing_platforms": [p for p in selected if p not in found]}
 
 
 @router.post("/search")
 async def search_book(req: SearchRequest):
-    """
-    책 검색 API
-
-    1. Supabase 캐시 확인 (24시간 이내 동일 쿼리)
-    2. 캐시 히트 → 즉시 반환
-    3. 캐시 미스 → 크롤러 실행 → 결과 저장 → 반환
-    """
-    if not req.query.strip():
-        raise HTTPException(status_code=400, detail="검색어를 입력해주세요")
-
-    query = req.query.strip()
-
-    # 1. 캐시 확인 (force_refresh=false일 때만)
-    try:
-        client = get_client()
-        if not req.force_refresh:
-            cached = find_cached_search(client, query)
-            if cached:
-                # 캐시된 결과에도 description 생성 가능
-                description = None
-                if req.include_description and cached["ratings"]:
-                    first_result = cached["ratings"][0]
-                    book_title = first_result.get("book_title", query)
-                    author = first_result.get("author")
-                    description = await generate_book_description(book_title, author)
-
-                return {
-                    "source": "cache",
-                    "search": cached["search"],
-                    "ratings": cached["ratings"],
-                    "description": description,
-                }
-    except Exception:
-        # Supabase 연결 실패 시 캐시 없이 진행
-        client = None
-
-    # 2. 크롤링 실행
-    result = await crawl_all(query, req.platforms)
-    result_dicts = result.to_dict()["results"]
-
-    # 3. 결과 저장 (Supabase 연결 가능한 경우)
-    search_record = None
-    if client and result_dicts:
-        try:
-            search_record = save_search_result(client, query, result_dicts)
-        except Exception:
-            pass
-
-    # 4. AI 설명 생성 (옵션)
-    description = None
-    if req.include_description and result_dicts:
-        # 첫 번째 결과에서 책 제목과 작가 추출
-        first_result = result_dicts[0]
-        book_title = first_result.get("book_title", query)
-        author = first_result.get("author")
-        description = await generate_book_description(book_title, author)
-
-    # 5. 응답
-    ratings = [r["normalized_rating"] for r in result_dicts if r.get("normalized_rating")]
-    avg_rating = sum(ratings) / len(ratings) if ratings else None
-    total_reviews = sum(r.get("review_count", 0) for r in result_dicts)
-
-    return {
-        "source": "crawl",
-        "search": {
-            "id": search_record["id"] if search_record else None,
-            "query": query,
-            "avg_rating": round(avg_rating, 2) if avg_rating else None,
-            "total_reviews": total_reviews,
-            "platform_count": len(result_dicts),
-        },
-        "ratings": result_dicts,
-        "description": description,
-    }
+    client, cached = await lookup(req)
+    if cached:
+        response = {"source": "cache", **cached}
+    else:
+        result = await crawl_all(req.query, req.platforms)
+        ratings = result.to_dict()["results"]
+        response = {"source": "crawl", "search": await persist(client, req.query, ratings, req.platforms), "ratings": ratings}
+    response["description"] = await generate_book_description(req.query) if req.include_description and response["ratings"] else None
+    response["search"] = with_coverage(response["search"], response["ratings"], req.platforms)
+    return response
 
 
 @router.get("/search/check")
-async def check_cache(query: str):
-    """
-    캐시 확인 API
-
-    캐시된 검색 결과가 있는지만 확인.
-    있으면 {"cached": true, "search": {...}}, 없으면 {"cached": false}
-    """
-    if not query.strip():
-        raise HTTPException(status_code=400, detail="검색어를 입력해주세요")
-
+async def check_cache(query: str, platforms: list[str] | None = Query(default=None)):
     try:
-        client = get_client()
-        cached = find_cached_search(client, query.strip())
-        if cached:
-            return {"cached": True, "search": cached["search"]}
-    except Exception:
-        pass
-
-    return {"cached": False}
+        req = SearchRequest(query=query, platforms=platforms)
+    except ValidationError:
+        raise HTTPException(status_code=422, detail="검색어와 플랫폼을 확인해주세요")
+    _, cached = await lookup(req)
+    return {"cached": True, "search": cached["search"]} if cached else {"cached": False}
 
 
 @router.get("/search/{search_id}")
 async def get_search(search_id: UUID):
-    """캐시된 검색 결과 조회"""
     try:
-        client = get_client()
+        saved = await asyncio.to_thread(get_saved_search, get_client(), str(search_id))
     except Exception:
         raise HTTPException(status_code=503, detail="데이터베이스 연결 실패")
-
-    search_id_str = str(search_id)
-    search = (
-        client.table("searches")
-        .select("*")
-        .eq("id", search_id_str)
-        .limit(1)
-        .execute()
-    )
-
-    if not search.data:
+    if saved is None:
         raise HTTPException(status_code=404, detail="검색 결과를 찾을 수 없습니다")
+    return {"source": "cache", **saved}
 
-    ratings = (
-        client.table("platform_ratings")
-        .select("*")
-        .eq("search_id", search_id_str)
-        .execute()
-    )
 
-    return {
-        "source": "cache",
-        "search": search.data[0],
-        "ratings": ratings.data,
-    }
+def sse(event, data):
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 @router.post("/search/stream")
 async def search_book_stream(req: SearchRequest):
-    """
-    SSE 스트리밍 검색 API
+    client, cached = await lookup(req)
 
-    각 플랫폼 결과를 개별 SSE 이벤트로 전송.
-    마지막에 event: done으로 요약 전송.
-    """
-    if not req.query.strip():
-        raise HTTPException(status_code=400, detail="검색어를 입력해주세요")
-
-    query = req.query.strip()
-
-    # 캐시 확인 (force_refresh가 아닌 경우만)
-    cached = None
-    try:
-        client = get_client()
-        if not req.force_refresh:
-            cached = find_cached_search(client, query)
-        if cached:
-            # 캐시 히트: description을 병렬로 생성하고 각 결과를 개별 이벤트로 전송
-            async def cached_stream():
-                # description 청크를 큐로 수집
-                desc_queue = asyncio.Queue()
-
-                async def stream_description():
-                    try:
-                        async for chunk in generate_book_description_stream(query):
-                            await desc_queue.put(("desc_chunk", chunk))
-                    except Exception:
-                        pass
-                    await desc_queue.put(("desc_done", None))
-
-                desc_task = asyncio.create_task(stream_description())
-
-                for r in cached["ratings"]:
-                    # 결과 나오기 전에 description 청크가 있으면 전송
-                    while not desc_queue.empty():
-                        try:
-                            event_type, data = desc_queue.get_nowait()
-                            if event_type == "desc_chunk":
-                                yield f"event: description_chunk\ndata: {json.dumps({'chunk': data}, ensure_ascii=False)}\n\n"
-                            elif event_type == "desc_done":
-                                break
-                        except asyncio.QueueEmpty:
-                            break
-
-                    yield f"data: {json.dumps(r, ensure_ascii=False)}\n\n"
-
-                # 결과 전송 끝났는데 description이 아직 안 끝났으면 대기
-                if not desc_task.done():
-                    while True:
-                        event_type, data = await desc_queue.get()
-                        if event_type == "desc_chunk":
-                            yield f"event: description_chunk\ndata: {json.dumps({'chunk': data}, ensure_ascii=False)}\n\n"
-                        elif event_type == "desc_done":
-                            break
+    async def events():
+        queue = asyncio.Queue()
+        async def crawl():
+            try:
+                if cached:
+                    for rating in cached["ratings"]:
+                        await queue.put(("rating", rating))
                 else:
-                    # Task 완료, 큐만 비우기
-                    while not desc_queue.empty():
-                        try:
-                            event_type, data = desc_queue.get_nowait()
-                            if event_type == "desc_chunk":
-                                yield f"event: description_chunk\ndata: {json.dumps({'chunk': data}, ensure_ascii=False)}\n\n"
-                        except asyncio.QueueEmpty:
-                            break
+                    async for rating in crawl_all_stream(req.query, req.platforms):
+                        await queue.put(("rating", rating))
+            except Exception:
+                await queue.put(("error", {"message": "검색 중 오류가 발생했습니다"}))
+            finally:
+                await queue.put(("crawl_done", None))
 
-                summary = {
-                    'source': 'cache',
-                    'search': cached['search'],
-                }
-                yield f"event: done\ndata: {json.dumps(summary, ensure_ascii=False)}\n\n"
-            return StreamingResponse(cached_stream(), media_type="text/event-stream")
-    except Exception:
-        client = None
-
-    async def event_stream():
-        from api.services.crawler_service import crawl_all_stream
-
-        # description 청크를 큐로 수집
-        desc_queue = asyncio.Queue()
-
-        async def stream_description():
+        async def describe():
             try:
-                async for chunk in generate_book_description_stream(query):
-                    await desc_queue.put(("desc_chunk", chunk))
+                if req.include_description:
+                    async for chunk in generate_book_description_stream(req.query):
+                        await queue.put(("description_chunk", {"chunk": chunk}))
             except Exception:
                 pass
-            await desc_queue.put(("desc_done", None))
+            finally:
+                await queue.put(("description_done", None))
 
-        desc_task = asyncio.create_task(stream_description())
-
+        tasks = [asyncio.create_task(crawl()), asyncio.create_task(describe())]
         results = []
-        async for result in crawl_all_stream(query, req.platforms):
-            # 크롤링 결과 나오기 전에 description 청크가 있으면 전송
-            while not desc_queue.empty():
+        complete = set()
+        try:
+            while len(complete) < 2:
                 try:
-                    event_type, data = desc_queue.get_nowait()
-                    if event_type == "desc_chunk":
-                        yield f"event: description_chunk\ndata: {json.dumps({'chunk': data}, ensure_ascii=False)}\n\n"
-                    elif event_type == "desc_done":
-                        break
-                except asyncio.QueueEmpty:
-                    break
+                    event, data = await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if event.endswith("_done"):
+                    complete.add(event)
+                    continue
+                if event == "rating":
+                    results.append(data)
+                yield sse(event, data)
+            search = cached["search"] if cached else await persist(client, req.query, results, req.platforms)
+            yield sse("done", {"source": "cache" if cached else "crawl", "search": with_coverage(search, results, req.platforms)})
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-            results.append(result)
-            yield f"data: {json.dumps(result, ensure_ascii=False)}\n\n"
-
-        # 크롤링 끝났는데 description이 아직 안 끝났으면 대기
-        if not desc_task.done():
-            while True:
-                event_type, data = await desc_queue.get()
-                if event_type == "desc_chunk":
-                    yield f"event: description_chunk\ndata: {json.dumps({'chunk': data}, ensure_ascii=False)}\n\n"
-                elif event_type == "desc_done":
-                    break
-        else:
-            # Task 완료, 큐만 비우기
-            while not desc_queue.empty():
-                try:
-                    event_type, data = desc_queue.get_nowait()
-                    if event_type == "desc_chunk":
-                        yield f"event: description_chunk\ndata: {json.dumps({'chunk': data}, ensure_ascii=False)}\n\n"
-                except asyncio.QueueEmpty:
-                    break
-
-        # DB에 저장
-        search_record = None
-        if client and results:
-            try:
-                search_record = save_search_result(client, query, results)
-            except Exception:
-                pass
-
-        # 요약 계산
-        ratings = [r["normalized_rating"] for r in results if r.get("normalized_rating")]
-        avg_rating = sum(ratings) / len(ratings) if ratings else None
-        total_reviews = sum(r.get("review_count", 0) for r in results)
-
-        summary = {
-            "source": "crawl",
-            "search": {
-                "id": search_record["id"] if search_record else None,
-                "query": query,
-                "avg_rating": round(avg_rating, 2) if avg_rating else None,
-                "total_reviews": total_reviews,
-                "platform_count": len(results),
-            },
-        }
-        yield f"event: done\ndata: {json.dumps(summary, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.get("/searches")
-async def list_searches(
-    sort_by: str = "created_at",
-    order: str = "desc",
-    limit: int = 50,
-    offset: int = 0,
-    platform: str | None = None,
-    sort_platform: str | None = None,
-    with_count: bool = True,
-):
-    """
-    검색 히스토리 조회
-
-    Query params:
-        sort_by: created_at | avg_rating | total_reviews | platform_rating
-        order: asc | desc
-        limit: 페이지 크기 (기본 50)
-        offset: 시작 위치
-        platform: 특정 플랫폼 필터 (optional)
-        sort_platform: 플랫폼 평점 정렬 기준 플랫폼 (sort_by=platform_rating일 때)
-        with_count: total count 포함 여부 (속도 최적화용)
-    """
+async def list_searches(sort_by: str = "created_at", order: str = "desc",
+                        limit: int = Query(default=50, ge=1, le=500),
+                        offset: int = Query(default=0, ge=0), platform: str | None = None,
+                        sort_platform: str | None = None, with_count: bool = True):
     try:
-        client = get_client()
+        return await asyncio.to_thread(get_all_searches, get_client(), sort_by, order, limit, offset,
+                                       platform, sort_platform, with_count)
     except Exception:
         raise HTTPException(status_code=503, detail="데이터베이스 연결 실패")
-
-    return get_all_searches(
-        client,
-        sort_by=sort_by,
-        order=order,
-        limit=limit,
-        offset=offset,
-        platform=platform,
-        sort_platform=sort_platform,
-        with_count=with_count,
-    )
 
 
 @router.get("/platforms")
 async def list_platforms():
-    """사용 가능한 플랫폼 목록"""
     return {"platforms": get_available_platforms()}
