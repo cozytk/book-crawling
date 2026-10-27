@@ -50,6 +50,10 @@ def test_stream_cache_history_roundtrip(client):
     saved = api.get(f'/api/search/{record["id"]}').json()
     assert saved["ratings"][0]["book_title"] == "데미안"
     assert api.get("/api/searches").json()["total"] == 1
+    # The existing history screen requests 500 rows for instant local filters.
+    response = api.get("/api/searches?limit=500&offset=0&with_count=false")
+    assert response.status_code == 200
+    assert len(response.json()["searches"]) == 1
 
 
 def test_partial_all_platform_search_reuses_its_exact_scope(client):

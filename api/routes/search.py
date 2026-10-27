@@ -170,7 +170,7 @@ async def search_book_stream(req: SearchRequest):
 
 @router.get("/searches")
 async def list_searches(sort_by: str = "created_at", order: str = "desc",
-                        limit: int = Query(default=50, ge=1, le=200),
+                        limit: int = Query(default=50, ge=1, le=500),
                         offset: int = Query(default=0, ge=0), platform: str | None = None,
                         sort_platform: str | None = None, with_count: bool = True):
     try:
