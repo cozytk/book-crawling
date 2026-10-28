@@ -137,7 +137,7 @@ class GoodreadsCrawler(BaseHttpCrawler):
             (book_url, book_title) 또는 (None, "") if not found
         """
         encoded_title = urllib.parse.quote(keyword)
-        search_url = f"https://www.goodreads.com/search?q={encoded_title}"
+        search_url = f"https://www.goodreads.com/search?q={encoded_title}&tab=books&filter=title"
 
         try:
             html, final_url = self._fetch_with_redirect(search_url)
@@ -182,6 +182,9 @@ class GoodreadsCrawler(BaseHttpCrawler):
             book_title = book_link.get_text(strip=True)
             self._selected_title = book_title
             return book_url, book_title
+
+        if not links and not re.search(r"no\s+(?:books|results)\s+(?:were\s+)?found|did not match any books",soup.get_text(" ",strip=True),re.I):
+            self.failure_status="parse_error"
 
         return None, ""
 

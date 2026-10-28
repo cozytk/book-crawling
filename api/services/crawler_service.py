@@ -20,7 +20,7 @@ PLATFORM_TIMEOUT = 18
 RESOLVE_TIMEOUT = 12
 REASONS = {"not_found": "일치하는 책을 찾지 못했습니다", "identity_mismatch": "상품·제목·ISBN이 일치하지 않습니다",
            "blocked": "사이트에서 수집을 차단하거나 요청을 제한했습니다", "timeout": "응답 대기 시간을 초과했습니다",
-           "parse_error": "상품은 찾았지만 점수 또는 평가 수를 모두 확인하지 못했습니다", "network_error": "사이트 연결에 실패했습니다",
+           "parse_error": "사이트 응답에서 책 또는 평점 정보를 확인하지 못했습니다", "network_error": "사이트 연결에 실패했습니다",
            "unavailable": "원서 정보를 확인하지 못했습니다"}
 
 
@@ -33,12 +33,16 @@ async def crawl_platform(crawler_cls, query, fallback_query=None, original_query
             crawler.expected_identity(expected_title, expected_author, strict_isbn=is_isbn(original_query or query))
             crawler._preferred_isbn = identity_isbn
             result = await crawler.crawl(query, attempt=1)
+            first_failure = crawler.failure_status
             if result is None and fallback_query and fallback_query != query and not is_isbn(original_query or ""):
                 crawler.failure_status = None
                 result = await crawler.crawl(fallback_query, attempt=2)
-            return result, crawler.failure_status
+            rank={"identity_mismatch":6,"blocked":5,"timeout":4,"network_error":4,"parse_error":3,"not_found":1,None:0}
+            failure=max((first_failure,crawler.failure_status),key=lambda value:rank.get(value,2))
+            return result, failure
     (result, failure), network_failure = await run_parser(lambda: asyncio.run(execute()))
-    failure = failure if failure == "identity_mismatch" else network_failure or failure
+    rank={"identity_mismatch":6,"blocked":5,"timeout":4,"network_error":4,"parse_error":3,"not_found":1,None:0}
+    failure=max((failure,network_failure),key=lambda value:rank.get(value,2))
     if on_failure and failure:
         on_failure(failure)
     return result

@@ -245,3 +245,23 @@ async def test_work_identity_ranks_author_group_before_exact_title_spelling():
     with patch.object(KyoboCrawler,"_fetch_html",return_value=html):
         identity=await resolve_work_identity("죄와 벌")
     assert identity.author=="표도르 도스토옙스키" and identity.isbn=="9788932909158"
+
+
+def test_goodreads_uses_observed_book_title_form_fields():
+    crawler=GoodreadsCrawler()
+    with patch.object(crawler,"_fetch_with_redirect",return_value=("<p>No results found</p>","https://www.goodreads.com/search")) as fetch:
+        assert crawler.search_by_keyword("A Book")== (None,"")
+    assert "tab=books&filter=title" in fetch.call_args.args[0]
+    assert crawler.failure_status is None
+
+
+async def test_goodreads_html_shell_does_not_poison_negative_cache_after_isbn_fallback():
+    from api.services import crawler_service
+    async def handler(request):
+        if "/search" in request.url.path:
+            return httpx.Response(200,text='<title>Book search results</title><h1>Search</h1><form></form>')
+        return httpx.Response(404)
+    failures=[]
+    async with SearchTransport(httpx.AsyncClient(transport=httpx.MockTransport(handler))):
+        result=await crawler_service.crawl_platform(GoodreadsCrawler,"A Book",fallback_query="9780132350884",original_query="A Book",on_failure=failures.append)
+    assert result is None and failures==["parse_error"]
