@@ -7,6 +7,7 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
+from .utils import title_score, is_isbn, clean_isbn, structured_isbns, isbn_matches, count_number, book_node, valid_rating
 
 
 class SarakCrawler(BaseHttpCrawler):
@@ -44,54 +45,61 @@ class SarakCrawler(BaseHttpCrawler):
         1. Yes24 검색으로 상품 ID 획득
         2. 사락 URL 구성: /reading-note/book/{product_id}
         """
-        encoded_query = urllib.parse.quote(keyword)
-        search_url = f"{self.yes24_url}/Product/Search?domain=ALL&query={encoded_query}"
-
-        try:
-            html = self._fetch_html(search_url)
-        except Exception:
+        from .yes24 import Yes24Crawler
+        identifier = Yes24Crawler()
+        identifier.expected_identity(self._expected_title, self._expected_author, self._strict_isbn)
+        identifier._fetch_html = self._fetch_html
+        url, title = identifier.search_by_keyword(keyword)
+        product_id = self._extract_product_id(url or "")
+        if not product_id:
             return None, ""
-
-        soup = BeautifulSoup(html, "html.parser")
-
-        # Yes24 검색 결과에서 첫 번째 책 찾기
-        keyword_lower = keyword.lower()
-        best_product_id = None
-        best_title = ""
-
-        for link in soup.select("a.gd_name"):
-            href = link.get("href", "")
-            text = link.get_text(strip=True)
-
-            # 중고서점 제외
-            if "UsedShopHub" in href:
-                continue
-
-            # /product/goods/ 형식만 허용
-            if "/product/goods/" not in href.lower():
-                continue
-
-            product_id = self._extract_product_id(href)
-            if not product_id:
-                continue
-
-            # 첫 번째 유효한 결과 저장
-            if best_product_id is None:
-                best_product_id = product_id
-                best_title = text
-
-            # 검색어가 제목에 포함된 경우 우선
-            if keyword_lower in text.lower():
-                best_product_id = product_id
-                best_title = text
-                break
-
-        if not best_product_id:
-            return None, ""
-
-        # 사락 URL 구성
-        sarak_url = f"{self.base_url}/reading-note/book/{best_product_id}"
-        return sarak_url, best_title
+        if not is_isbn(keyword) and not is_isbn(self._original_query or ''):
+            # The largest Yes24 written-review population can have very few
+            # Sarak votes. Reuse its verified search candidates, but compare
+            # this source's own aggregates for at most three eligible books.
+            candidates=sorted(getattr(identifier,'_candidate_products',[]),key=lambda c:c['support'],reverse=True)
+            unique={}
+            for candidate in candidates:
+                candidate_id=self._extract_product_id(candidate['url'])
+                if candidate_id and candidate_id not in unique:
+                    unique[candidate_id]=candidate
+                if len(unique)==3:
+                    break
+            aggregates=[]
+            for candidate_id,candidate in unique.items():
+                try:
+                    data=json.loads(self._fetch_html(f'{self.api_url}/{candidate_id}/book-statistics-summary'))
+                    if str(data.get('goodsNo'))!=candidate_id:
+                        continue
+                    voters=count_number(data.get('userWhoDidVoteThisBookCount'))
+                    score=valid_rating(data.get('starPointAverageForBookInfo'),10)
+                    if voters is None or score is None or score<=0:
+                        continue
+                    aggregates.append((voters,count_number(data.get('reviewCount')) or 0,candidate_id,candidate,data))
+                except Exception:
+                    continue
+            for _,_,candidate_id,candidate,data in sorted(aggregates,key=lambda x:(x[0],x[1]),reverse=True):
+                try:
+                    detail=BeautifulSoup(self._fetch_html(candidate['url']),'html.parser')
+                    node=book_node(detail,candidate['title'])
+                    if not node or str(node.get('sku',''))!=candidate_id or not identifier.verify_detail(detail,str(node.get('name',''))):
+                        continue
+                except Exception:
+                    continue
+                self.book_isbn,self.book_author=identifier.book_isbn,identifier.book_author
+                self.rating_count=count_number(data.get('userWhoDidVoteThisBookCount'))
+                self.text_review_count=count_number(data.get('reviewCount'))
+                self._cached_rating=valid_rating(data.get('starPointAverageForBookInfo'),10)
+                self._cached_review_count=self.rating_count
+                self._rating_loaded=self.count_observed=True
+                from .transport import active_transport
+                transport=active_transport()
+                if transport:
+                    transport.diagnostics.setdefault(self.name,{}).update({'method':'verified_candidate_aggregates',
+                        'product_id':candidate_id,'candidates':[{'product_id':a[2],'rating_count':a[0],'text_review_count':a[1]} for a in aggregates]})
+                return f'{self.base_url}/reading-note/book/{candidate_id}',str(node['name'])
+        self.book_isbn, self.book_author = identifier.book_isbn, identifier.book_author
+        return f"{self.base_url}/reading-note/book/{product_id}", title
 
     def _extract_goods_no(self, url: str) -> str | None:
         """사락 URL에서 상품 번호 추출"""
@@ -106,6 +114,8 @@ class SarakCrawler(BaseHttpCrawler):
         - starPointAverageForBookInfo: 평점 (10점 만점)
         - userWhoDidVoteThisBookCount: 평가 참여자 수
         """
+        if self._rating_loaded:
+            return self._cached_rating,self._cached_review_count
         goods_no = self._extract_goods_no(url)
         if not goods_no:
             self.logger.error("extract_goods_no_failed", f"URL: {url}")
@@ -120,7 +130,9 @@ class SarakCrawler(BaseHttpCrawler):
             self.logger.api_response("book-statistics-summary", data)
 
             rating = data.get("starPointAverageForBookInfo")
-            review_count = data.get("userWhoDidVoteThisBookCount", 0)
+            self.rating_count = count_number(data.get("userWhoDidVoteThisBookCount"))
+            self.text_review_count = count_number(data.get("reviewCount"))
+            review_count = self.rating_count or 0
 
             # 유효성 검사
             if rating is not None and (rating <= 0 or rating > 10):

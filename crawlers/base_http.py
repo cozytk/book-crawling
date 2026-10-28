@@ -1,3 +1,4 @@
+from crawlers.transport import fetch_sync, active_transport
 """HTTP 전용 크롤러 베이스 클래스 - 브라우저 없음"""
 
 import time
@@ -5,6 +6,7 @@ import urllib.request
 
 from crawlers.base import BaseCrawler
 from models.book import PlatformRating
+from crawlers.utils import book_node, structured_isbns, isbn_matches, is_isbn, title_score, author_matches
 
 
 class BaseHttpCrawler(BaseCrawler):
@@ -36,6 +38,74 @@ class BaseHttpCrawler(BaseCrawler):
     def __init__(self):
         """로거 초기화"""
         super().__init__()
+        self.rating_count = None
+        self.text_review_count = None
+        self.short_review_count = None
+        self.book_isbn = None
+        self.book_author = None
+        self._rating_loaded = False
+        self._expected_title = None
+        self._expected_author = None
+        self._preferred_isbn = None
+        self._strict_isbn = True
+        self.failure_status = None
+        self.count_observed = False
+
+    def expected_identity(self, title=None, author=None, strict_isbn=True):
+        self._expected_title = title
+        self._expected_author = author
+        self._strict_isbn = strict_isbn
+
+    def reset_result(self):
+        self.rating_count = self.text_review_count = None
+        self.short_review_count = None
+        self.book_isbn = self.book_author = None
+        self._cached_rating = None
+        self._cached_review_count = 0
+        self._rating_loaded = False
+        self.failure_status = None
+        self._selected_title = None
+        self.count_observed = False
+
+    def verify_detail(self, soup, title, query=None, allow_product=False):
+        node = book_node(soup, title, allow_product) or {}
+        identifiers = structured_isbns(soup)
+        raw_isbn = node.get("isbn")
+        identifiers.extend(raw_isbn if isinstance(raw_isbn, list) else [raw_isbn] if raw_isbn else [])
+        author = node.get("author", [])
+        author = author if isinstance(author, list) else [author]
+        author = ", ".join(a.get("name", "") if isinstance(a, dict) else str(a) for a in author)
+        if not author:
+            author_node = soup.select_one('#bylineInfo, .ContributorLinksList, [itemprop="author"], h3.h3_work_author')
+            author = author_node.get_text(" ", strip=True) if author_node else ""
+        if not author:
+            import re
+            byline = re.search(r"\s+by\s+(.+)$", title, re.I)
+            author = byline.group(1).strip() if byline else ""
+        expected = self._expected_title or (query if query and not is_isbn(query) else None)
+        node_isbns = raw_isbn if isinstance(raw_isbn, list) else [raw_isbn] if raw_isbn else []
+        exact_book_isbn = bool(query and is_isbn(query) and isbn_matches(query, node_isbns))
+        if not title or (expected and not title_score(expected, title) and not exact_book_isbn) or (self._expected_author and not author) or not author_matches(self._expected_author, author):
+            self.failure_status = "identity_mismatch"
+            return False
+        if query and is_isbn(query) and not isbn_matches(query, identifiers):
+            if self._strict_isbn or not expected:
+                self.failure_status = "identity_mismatch"
+                return False
+        self.book_isbn = next((i for i in identifiers if i), None)
+        self.book_author = author or None
+        return True
+
+    def result_record(self, query, url, title, rating, count):
+        display_count = self.rating_count if self.rating_count is not None else self.text_review_count
+        if display_count is None and (count or self.count_observed):
+            display_count = count
+        return PlatformRating(self.name, rating, self.rating_scale, display_count, url, title,
+                              rating_count=self.rating_count, text_review_count=self.text_review_count,
+                              short_review_count=self.short_review_count,
+                              isbn=self.book_isbn, author=self.book_author,
+                              comparison_scope="edition" if is_isbn(self._original_query or query) else "work",
+                              edition_note="지정 ISBN 판본" if is_isbn(self._original_query or query) else "사이트가 선택한 판본 · 원문 제목 확인")
 
     async def __aenter__(self):
         """async with 진입 - HTTP 크롤러는 별도 초기화 불필요"""
@@ -56,6 +126,10 @@ class BaseHttpCrawler(BaseCrawler):
         매 요청마다 새로운 opener를 생성하여 세션/쿠키 간섭 방지.
         UTF-8 우선, 실패 시 EUC-KR로 디코딩.
         """
+        response = fetch_sync(url, {"User-Agent": self.user_agent})
+        if response is not None:
+            self._last_url = response.url
+            return response.text
         start = time.perf_counter()
         try:
             opener = urllib.request.build_opener()
@@ -210,6 +284,7 @@ class BaseHttpCrawler(BaseCrawler):
             PlatformRating 또는 None if not found
         """
         self._current_attempt = attempt
+        self.reset_result()
         start = time.perf_counter()
         try:
             book_url, book_title = await self.search_book(query)
@@ -224,8 +299,13 @@ class BaseHttpCrawler(BaseCrawler):
                 )
                 return None
 
-            await self.delay()
+            if not self._rating_loaded and active_transport() is None:
+                await self.delay()
             rating, review_count = await self.get_rating(book_url)
+            if self.failure_status == "identity_mismatch":
+                return None
+            if rating is None and self.rating_count is None and self.text_review_count is None:
+                self.failure_status = self.failure_status or "parse_error"
 
             elapsed_ms = (time.perf_counter() - start) * 1000
             self.logger.crawl_complete(
@@ -240,14 +320,7 @@ class BaseHttpCrawler(BaseCrawler):
                 attempt=attempt,
             )
 
-            return PlatformRating(
-                platform=self.name,
-                rating=rating,
-                rating_scale=self.rating_scale,
-                review_count=review_count,
-                url=book_url,
-                book_title=book_title,
-            )
+            return self.result_record(query, book_url, book_title, rating, review_count)
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start) * 1000
             self.logger.error("crawl_failed", str(e), {"query": query})

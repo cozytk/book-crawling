@@ -1,0 +1,23 @@
+[
+ {"query":"데미안","title":"데미안","match":true},
+ {"query":"데미안","title":"데 미 안","match":true},
+ {"query":"데미안","title":"데미안 - 헤르만 헤세","match":true},
+ {"query":"사피엔스","title":"사피엔스: 인류의 역사","match":true},
+ {"query":"클린 코드","title":"Clean Code(클린 코드)","match":true},
+ {"query":"Clean Code","title":"Clean Code: A Handbook of Agile Software Craftsmanship","match":true},
+ {"query":"Sapiens","title":"Sapiens: A Brief History of Humankind by Yuval Noah Harari","match":true},
+ {"query":"해리 포터 상","title":"해리 포터 상","match":true},
+ {"query":"해리 포터 1","title":"해리 포터 1","match":true},
+ {"query":"데미안","title":"데미안 해설","match":false},
+ {"query":"데미안","title":"데미안 (해설서)","match":false},
+ {"query":"사피엔스","title":"사피엔스 워크북","match":false},
+ {"query":"해리 포터 상","title":"해리 포터 하","match":false},
+ {"query":"해리 포터 1","title":"해리 포터 2","match":false},
+ {"query":"데미안 1","title":"데미안 10","match":false},
+ {"query":"Clean Code","title":"The Clean Coder","match":false},
+ {"query":"Clean Code","title":"Understanding Clean Code","match":false},
+ {"query":"Sapiens","title":"Sapiens Workbook","match":false},
+ {"query":"사피엔스","title":"어린이 사피엔스","match":false},
+ {"query":"데미안","title":"싯다르타","match":false},
+ {"query":"사피엔스","title":"사피엔스 이야기","match":false}
+]

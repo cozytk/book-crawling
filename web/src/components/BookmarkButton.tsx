@@ -7,7 +7,7 @@ interface BookmarkButtonProps {
   searchId: string;
   query: string;
   avgRating: number | null;
-  totalReviews: number;
+  totalReviews: number | null;
   platformCount: number;
   size?: "sm" | "md";
 }
@@ -47,7 +47,9 @@ export default function BookmarkButton({
     <button
       onClick={handleClick}
       title={bookmarked ? "읽을 책에서 제거" : "읽을 책에 추가"}
-      className="p-1 rounded-md hover:bg-gray-100 transition-colors"
+      aria-label={bookmarked ? "읽을 책에서 제거" : "읽을 책에 추가"}
+      aria-pressed={bookmarked}
+      className="bookmark-button"
     >
       <svg
         className={sizeClass}

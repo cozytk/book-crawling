@@ -20,7 +20,7 @@ export default function BookmarksPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap gap-3 items-center justify-between">
         <h1 className="text-2xl font-bold">읽을 책</h1>
         <Link href="/" className="text-sm text-blue-600 hover:text-blue-800">
           ← 검색으로 돌아가기
@@ -48,7 +48,7 @@ export default function BookmarksPage() {
           </svg>
           <p className="text-gray-500">저장한 책이 없습니다</p>
           <p className="text-sm text-gray-400">
-            검색 결과나 히스토리에서 북마크 아이콘을 눌러 추가하세요
+            검색 결과나 기록에서 북마크 아이콘을 눌러 추가하세요
           </p>
         </div>
       )}
@@ -60,9 +60,9 @@ export default function BookmarksPage() {
               key={b.searchId}
               className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow"
             >
-              <div className="flex items-start justify-between">
+              <div className="flex flex-wrap gap-4 items-start justify-between">
                 <div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
                     <h3 className="font-semibold text-lg">{b.query}</h3>
                     <Link
                       href={`/history/${b.searchId}`}
@@ -80,7 +80,7 @@ export default function BookmarksPage() {
                     저장
                   </p>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <div className="text-right">
                     {b.avgRating !== null && (
                       <p className="text-2xl font-bold tabular-nums">
@@ -91,13 +91,14 @@ export default function BookmarksPage() {
                       </p>
                     )}
                     <p className="text-xs text-gray-500">
-                      {b.totalReviews.toLocaleString()}개 리뷰 ·{" "}
+                      {b.totalReviews == null ? "평가 수 미확인" : `확인된 평가 ${b.totalReviews.toLocaleString()}개`} ·{" "}
                       {b.platformCount}개 플랫폼
                     </p>
                   </div>
                   <button
                     onClick={() => handleRemove(b.searchId)}
                     title="읽을 책에서 제거"
+                    aria-label={`${b.query} 읽을 책에서 제거`}
                     className="p-1 rounded-md hover:bg-red-50 transition-colors"
                   >
                     <svg

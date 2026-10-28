@@ -1,0 +1,502 @@
+[
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "햄릿",
+    "title": "Hamlet",
+    "url": "https://www.amazon.com/dp/1451669410",
+    "source_author": "William Shakespeare",
+    "local_author": "셰익스피어",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:12:14.077Z",
+    "expires_at": 1795798999.9504058,
+    "evidence_url": "https://www.amazon.com/s?k=Hamlet&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/1586638440",
+        "title": "Hamlet: No Fear Shakespeare Side-by-Side Plain English",
+        "source_author": "William Shakespeare"
+      },
+      {
+        "url": "https://www.amazon.com/dp/9387779343",
+        "title": "Hamlet",
+        "source_author": "William Shakespeare"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "오만과 편견",
+    "title": "Pride and Prejudice",
+    "url": "https://www.amazon.com/dp/1481274953",
+    "source_author": "Jane Austen",
+    "local_author": "제인 오스틴",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:12:15.244Z",
+    "expires_at": 1795798999.9516869,
+    "evidence_url": "https://www.amazon.com/s?k=Pride%20and%20Prejudice&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/B00LN37M8G",
+        "title": "Pride and Prejudice",
+        "source_author": "Jane Austen"
+      },
+      {
+        "url": "https://www.amazon.com/dp/B071SKHMDL",
+        "title": "Pride and Prejudice (AmazonClassics Edition)",
+        "source_author": "Jane Austen"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "레 미제라블",
+    "title": "Les Misérables",
+    "url": "https://www.amazon.com/dp/1626864640",
+    "source_author": "Victor Hugo",
+    "local_author": "빅토르 위고",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:12:16.831Z",
+    "expires_at": 1795798999.9533708,
+    "evidence_url": "https://www.amazon.com/s?k=Les%20Mis%C3%A9rables&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/1667209736",
+        "title": "Les Misérables (Word Cloud Classics)",
+        "source_author": "Victor Hugo"
+      },
+      {
+        "url": "https://www.amazon.com/dp/1846140498",
+        "title": "Les Miserables (Penguin Clothbound Classics)",
+        "source_author": "Victor Hugo"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "죄와 벌",
+    "title": "Crime and Punishment (AmazonClassics Edition)",
+    "url": "https://www.amazon.com/dp/B074W9WW4S",
+    "source_author": "Fyodor Dostoevsky",
+    "local_author": "도스토예프스키",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:12:18.437Z",
+    "expires_at": 1795798999.955071,
+    "evidence_url": "https://www.amazon.com/s?k=Crime%20and%20Punishment&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/0679734503",
+        "title": "Crime and Punishment (Vintage Classics)",
+        "source_author": "Fyodor Dostoevsky"
+      },
+      {
+        "url": "https://www.amazon.com/dp/0679420290",
+        "title": "Crime and Punishment (Everyman's Library)",
+        "source_author": "Fyodor Dostoevsky"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "동물농장",
+    "title": "Animal Farm: 75th Anniversary Edition (Signet Classics)",
+    "url": "https://www.amazon.com/dp/0451526341",
+    "source_author": "George Orwell",
+    "local_author": "조지 오웰",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:14:52.591Z",
+    "expires_at": 1795798999.9564748,
+    "evidence_url": "https://www.amazon.com/s?k=Animal%20Farm&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/0151072558",
+        "title": "Animal Farm",
+        "source_author": "George Orwell"
+      },
+      {
+        "url": "https://www.amazon.com/dp/B0FC2VDGPM",
+        "title": "Animal Farm",
+        "source_author": "George Orwell"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "1984",
+    "title": "Nineteen eighty-four",
+    "url": "https://www.amazon.com/dp/0241453518",
+    "source_author": "George Orwell",
+    "local_author": "조지 오웰",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:12:20.379Z",
+    "expires_at": 1795798999.957769,
+    "evidence_url": "https://www.amazon.com/s?k=Nineteen%20Eighty-Four&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/1840228024",
+        "title": "Nineteen Eighty-Four: A Novel (Wordsworth Classics) (International Edition)",
+        "source_author": "George Orwell"
+      },
+      {
+        "url": "https://www.amazon.com/dp/1840228822",
+        "title": "Nineteen Eighty-Four (Wordsworth Collector's Edition)",
+        "source_author": "George Orwell"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "이방인",
+    "title": "The Stranger (Vintage International)",
+    "url": "https://www.amazon.com/dp/0679720200",
+    "source_author": "Albert Camus",
+    "local_author": "알베르 카뮈",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:12:22.055Z",
+    "expires_at": 1795798999.958955,
+    "evidence_url": "https://www.amazon.com/s?k=The%20Stranger&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/B008QLXSG8",
+        "title": "The Stranger (Vintage International)",
+        "source_author": "Albert Camus"
+      },
+      {
+        "url": "https://www.amazon.com/dp/B0DHRLTG7J",
+        "title": "The Stranger: The Original Unabridged and Complete Edition (Albert Camus Classics)",
+        "source_author": "Albert Camus"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "페스트",
+    "title": "the plague",
+    "url": "https://www.amazon.com/dp/B09MCQ82Q2",
+    "source_author": "Albert Camus",
+    "local_author": "알베르 카뮈",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:12:23.711Z",
+    "expires_at": 1795798999.959739,
+    "evidence_url": "https://www.amazon.com/s?k=The%20Plague&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/0593082095",
+        "title": "The Plague: A new translation by Laura Marris",
+        "source_author": "Albert Camus"
+      },
+      {
+        "url": "https://www.amazon.com/dp/B0CNT9M49Q",
+        "title": "The Plague",
+        "source_author": "Albert Camus"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "위대한 개츠비",
+    "title": "The Great Gatsby: The Only Authorized Edition",
+    "url": "https://www.amazon.com/dp/B000FC0PDA",
+    "source_author": "F. Scott Fitzgerald",
+    "local_author": "F. 스콧 피츠제럴드",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:12:25.364Z",
+    "expires_at": 1795798999.960798,
+    "evidence_url": "https://www.amazon.com/s?k=The%20Great%20Gatsby&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/1954839243",
+        "title": "The Great Gatsby - Reader's Library Classic",
+        "source_author": "F. Scott Fitzgerald"
+      },
+      {
+        "url": "https://www.amazon.com/dp/B086W9Q59K",
+        "title": "The Great Gatsby (AmazonClassics Edition)",
+        "source_author": "F. Scott Fitzgerald"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "호밀밭의 파수꾼",
+    "title": "The Catcher in the Rye",
+    "url": "https://www.amazon.com/dp/0316769177",
+    "source_author": "J. D. Salinger",
+    "local_author": "제롬 데이비드 샐린저",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:12:26.853Z",
+    "expires_at": 1795798999.962013,
+    "evidence_url": "https://www.amazon.com/s?k=The%20Catcher%20in%20the%20Rye&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/B000MR6F6Y",
+        "title": "The Catcher in the Rye",
+        "source_author": "J. D. Salinger"
+      },
+      {
+        "url": "https://www.amazon.com/dp/B0GH1B17FD",
+        "title": "The Catcher in the Rye: Essential Guide for Busy Readers",
+        "source_author": "J. D. Salinger"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "데미안",
+    "title": "Demian (Portuguese Edition)",
+    "url": "https://www.amazon.com/dp/B0191ZQ9U4",
+    "source_author": "Hermann Hesse",
+    "local_author": "헤르만 헤세",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:13:29.467Z",
+    "expires_at": 1795798999.963014,
+    "evidence_url": "https://www.amazon.com/s?k=Demian&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/1614270260",
+        "title": "Demian: The Story of a Youth",
+        "source_author": "Hermann Hesse"
+      },
+      {
+        "url": "https://www.amazon.com/dp/0060931914",
+        "title": "Demian: A Nobel Prize-Winning Psychological Novel of Identity, Rebellion, and the Awakening of Self (Perennial Classics)",
+        "source_author": "Hermann Hesse"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "인간의 굴레에서",
+    "title": "Of Human Bondage",
+    "url": "https://www.amazon.com/dp/1089248474",
+    "source_author": "W. Somerset Maugham",
+    "local_author": "서머싯 몸",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:13:30.878Z",
+    "expires_at": 1795798999.964436,
+    "evidence_url": "https://www.amazon.com/s?k=Of%20Human%20Bondage&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/B0BWDT27MV",
+        "title": "Of Human Bondage",
+        "source_author": "W. Somerset Maugham"
+      },
+      {
+        "url": "https://www.amazon.com/dp/059368768X",
+        "title": "Of Human Bondage: A Novel (Vintage International)",
+        "source_author": "W. Somerset Maugham"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "참을 수 없는 존재의 가벼움",
+    "title": "The Unbearable Lightness of Being: The Modern Literary Classic (Harper Perennial Deluxe Editions)",
+    "url": "https://www.amazon.com/dp/0061148520",
+    "source_author": "Milan Kundera",
+    "local_author": "밀란 쿤데라",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:13:32.390Z",
+    "expires_at": 1795798999.965673,
+    "evidence_url": "https://www.amazon.com/s?k=The%20Unbearable%20Lightness%20of%20Being&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/B0G2CWT7HM",
+        "title": "The Unbearable Lightness of Being: Special Edition [DVD]",
+        "source_author": "Milan Kundera"
+      },
+      {
+        "url": "https://www.amazon.com/dp/B01M1P8J8E",
+        "title": "The Unbearable Lightness of Being by Milan Kundera (1985-04-29)",
+        "source_author": "Milan Kundera"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "노인과 바다",
+    "title": "Old Man and the Sea",
+    "url": "https://www.amazon.com/dp/0684801221",
+    "source_author": "Ernest Hemingway",
+    "local_author": "어니스트 헤밍웨이",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:13:33.852Z",
+    "expires_at": 1795798999.967075,
+    "evidence_url": "https://www.amazon.com/s?k=The%20Old%20Man%20and%20the%20Sea&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/B0GX31YRYV",
+        "title": "The Old Man And The Sea",
+        "source_author": "Ernest Hemingway"
+      },
+      {
+        "url": "https://www.amazon.com/dp/B01C8KIJGG",
+        "title": "The Old Man and the Sea by Ernest Hemingway (Book Analysis): Detailed Summary, Analysis and Reading Guide (BrightSummaries.com)",
+        "source_author": "Ernest Hemingway"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "카라마조프가의 형제들",
+    "title": "The Brothers Karamazov",
+    "url": "https://www.amazon.com/dp/B0918B6C6J",
+    "source_author": "Fyodor Dostoevsky",
+    "local_author": "표도르 도스토옙스키",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:13:35.894Z",
+    "expires_at": 1795798999.9689689,
+    "evidence_url": "https://www.amazon.com/s?k=The%20Brothers%20Karamazov&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/0140449248",
+        "title": "The Brothers Karamazov: A Novel in Four Parts and an Epilogue",
+        "source_author": "Fyodor Dostoevsky"
+      },
+      {
+        "url": "https://www.amazon.com/dp/B000FC22RC",
+        "title": "The Brothers Karamazov",
+        "source_author": "Fyodor Dostoevsky"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "안나 카레니나",
+    "title": "Anna Karenina",
+    "url": "https://www.amazon.com/dp/B08MVPXVG8",
+    "source_author": "Leo Tolstoy",
+    "local_author": "레프 톨스토이",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:13:37.415Z",
+    "expires_at": 1795798999.970529,
+    "evidence_url": "https://www.amazon.com/s?k=Anna%20Karenina&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/1853262714",
+        "title": "Anna Karenina (Wordsworth Classics)",
+        "source_author": "Leo Tolstoy"
+      },
+      {
+        "url": "https://www.amazon.com/dp/0143035002",
+        "title": "Anna Karenina",
+        "source_author": "Leo Tolstoy"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "수레바퀴 아래",
+    "title": "Beneath the Wheel",
+    "url": "https://www.amazon.com/dp/B0DDX4RL3W",
+    "source_author": "Hermann Hesse",
+    "local_author": "헤르만 헤세",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:13:39.033Z",
+    "expires_at": 1795798999.9716501,
+    "evidence_url": "https://www.amazon.com/s?k=Beneath%20the%20Wheel&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/B0BVMJ4FP5",
+        "title": "Beneath the Wheel",
+        "source_author": "Hermann Hesse"
+      },
+      {
+        "url": "https://www.amazon.com/dp/B0G62K1ZZP",
+        "title": "Beneath the Wheel",
+        "source_author": "Hermann Hesse"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "싯다르타",
+    "title": "Siddhartha: A Novel",
+    "url": "https://www.amazon.com/dp/0553208845",
+    "source_author": "Hermann Hesse",
+    "local_author": "헤르만 헤세",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:13:40.616Z",
+    "expires_at": 1795798999.972695,
+    "evidence_url": "https://www.amazon.com/s?k=Siddhartha&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/9387779335",
+        "title": "Siddhartha (Deluxe Hardbound Edition)",
+        "source_author": "Hermann Hesse"
+      },
+      {
+        "url": "https://www.amazon.com/dp/B0FJJ6WGDY",
+        "title": "Siddhartha (German Edition)",
+        "source_author": "Hermann Hesse"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "백년의 고독",
+    "title": "One Hundred Years of Solitude: A Novel (Harper Perennial Modern Classics)",
+    "url": "https://www.amazon.com/dp/0060883286",
+    "source_author": "Gabriel García Márquez",
+    "local_author": "가브리엘 가르시아 마르케스",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:13:42.168Z",
+    "expires_at": 1795798999.97382,
+    "evidence_url": "https://www.amazon.com/s?k=One%20Hundred%20Years%20of%20Solitude&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/B0BFK4THKQ",
+        "title": "One Hundred Years of Solitude",
+        "source_author": "Gabriel García Márquez"
+      },
+      {
+        "url": "https://www.amazon.com/dp/B01M3PNSA2",
+        "title": "One Hundred Years of Solitude by Gabriel García Marquez (Book Analysis): Detailed Summary, Analysis and Reading Guide (BrightSummaries.com)",
+        "source_author": "Gabriel García Márquez"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "platform": "amazon",
+    "query": "젊은 베르테르의 슬픔",
+    "title": "The Sorrows of Young Werther (Penguin Classics)",
+    "url": "https://www.amazon.com/dp/014044503X",
+    "source_author": "Johann Wolfgang von Goethe",
+    "local_author": "요한 볼프강 폰 괴테",
+    "provenance": "aside_book_search",
+    "observed_at": "2026-10-28T16:13:43.755Z",
+    "expires_at": 1795798999.9752269,
+    "evidence_url": "https://www.amazon.com/s?k=The%20Sorrows%20of%20Young%20Werther&i=stripbooks&language=en_US",
+    "alternates": [
+      {
+        "url": "https://www.amazon.com/dp/B08LNF417J",
+        "title": "The Sorrows of Young Werther",
+        "source_author": "Johann Wolfgang von Goethe"
+      },
+      {
+        "url": "https://www.amazon.com/dp/1420957899",
+        "title": "The Sorrows of Young Werther: (R. D. Boylan 번역)",
+        "source_author": "Johann Wolfgang von Goethe"
+      }
+    ]
+  }
+]

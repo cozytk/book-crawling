@@ -63,7 +63,7 @@ class TestAmazonParseDetailPage:
         html = """
         <html>
         <span id="productTitle">Test Book Title</span>
-        <span class="a-icon-alt">4.5 out of 5 stars</span>
+        <div id="averageCustomerReviews"><span class="a-icon-alt">4.5 out of 5 stars</span></div>
         <span id="acrCustomerReviewText">1,234 ratings</span>
         </html>
         """

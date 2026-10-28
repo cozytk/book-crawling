@@ -15,7 +15,7 @@ export default function RatingGrid({ ratings }: RatingGridProps) {
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div className="rating-grid">
       {ratings.map((r) => (
         <RatingCard key={r.platform} rating={r} />
       ))}

@@ -1,3 +1,4 @@
+from crawlers.transport import fetch_sync
 """알라딘 API 기반 크롤러"""
 
 import html
@@ -8,7 +9,10 @@ import urllib.parse
 import urllib.request
 
 from .base_http import BaseHttpCrawler
+from .utils import title_score, is_isbn, clean_isbn, author_matches, candidate_score
 from models.book import PlatformRating
+from bs4 import BeautifulSoup
+import re
 
 
 class AladinCrawler(BaseHttpCrawler):
@@ -25,11 +29,8 @@ class AladinCrawler(BaseHttpCrawler):
             # .env 파일에서 직접 읽기 시도
             env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
             if os.path.exists(env_path):
-                with open(env_path) as f:
-                    for line in f:
-                        if line.startswith("ALADIN_TTB_KEY="):
-                            self.ttb_key = line.strip().split("=", 1)[1]
-                            break
+                from dotenv import dotenv_values
+                self.ttb_key = dotenv_values(env_path).get("ALADIN_TTB_KEY") or ""
 
     def _api_request(self, endpoint: str, params: dict) -> dict | None:
         """알라딘 API 호출"""
@@ -38,10 +39,13 @@ class AladinCrawler(BaseHttpCrawler):
         params["Version"] = "20131101"
 
         query_string = urllib.parse.urlencode(params)
-        url = f"http://www.aladin.co.kr/ttb/api/{endpoint}?{query_string}"
+        url = f"https://www.aladin.co.kr/ttb/api/{endpoint}?{query_string}"
 
         start = time.perf_counter()
         try:
+            shared = fetch_sync(url, {"User-Agent": self.user_agent})
+            if shared is not None:
+                return json.loads(shared.text)
             opener = urllib.request.build_opener()
             opener.addheaders = [("User-Agent", self.user_agent)]
             response = opener.open(url, timeout=10)
@@ -64,6 +68,51 @@ class AladinCrawler(BaseHttpCrawler):
             return None
 
     async def search_book(self, query: str) -> tuple[str | None, str]:
+        return self.search_book_sync(query)
+
+    def _popular_product(self, query):
+        """Native review ordering discovers older editions hidden by sales rank."""
+        url=f'{self.base_url}/search/wsearchresult.aspx?SearchTarget=Book&SearchWord={urllib.parse.quote(query)}&SortOrder=4'
+        try:
+            soup=BeautifulSoup(self._fetch_html(url),'html.parser')
+        except Exception:
+            return None
+        candidates=[]
+        for row in soup.select('.ss_book_list'):
+            link=row.select_one('a.bo3')
+            if not link:
+                continue
+            title=link.get_text(' ',strip=True)
+            lines=[li.get_text(' ',strip=True) for li in row.select('li')]
+            author=next((line for line in lines if '(지은이)' in line),'')
+            title_line=next((line for line in lines if title in line and '[국내도서]' in line),title)
+            if not author or re.search(r'원작|각색|엮은이',author):
+                continue
+            if re.search(r'세트|전\s*\d+\s*권',title):
+                continue
+            if any(word in title_line and word not in query for word in ('청소년','어린이','논술','문학툰','만화','명작동화')):
+                continue
+            score=candidate_score(query,title,author,self._expected_author)
+            count=next((int(m.group(1).replace(',','')) for line in lines
+                        if (m:=re.search(r'\d+(?:\.\d+)?\s*\(\s*([\d,]+)\s*\)\s*\|?\s*세일즈포인트',line))),None)
+            item_id=urllib.parse.parse_qs(urllib.parse.urlsplit(link.get('href','')).query).get('ItemId',[''])[0]
+            if score and count is not None and item_id.isdigit():
+                candidates.append((count,score,item_id,title))
+        if not candidates:
+            return None
+        _,_,item_id,title=max(candidates)
+        result=self._api_request('ItemLookUp.aspx',{'itemIdType':'ItemId','ItemId':item_id,'OptResult':'ratingInfo'})
+        item=next((i for i in (result or {}).get('item',[]) if str(i.get('itemId'))==item_id),None)
+        if not item or not candidate_score(query,item.get('title',''),item.get('author',''),self._expected_author):
+            return None
+        from .transport import active_transport
+        transport=active_transport()
+        if transport:
+            transport.diagnostics[self.name]={'method':'verified_review_order','item_id':item_id,
+                'candidates':[{'item_id':c[2],'count':c[0],'title':c[3]} for c in sorted(candidates,reverse=True)[:6]]}
+        return {'item':[item]}
+
+    def search_book_sync(self, query: str) -> tuple[str | None, str]:
         """책 검색 후 상세 페이지 URL과 itemId 반환"""
         self.logger.search_start(
             query,
@@ -83,7 +132,15 @@ class AladinCrawler(BaseHttpCrawler):
             "SearchTarget": "Book",
         }
 
-        result = self._api_request("ItemSearch.aspx", params)
+        if is_isbn(query):
+            result = self._api_request("ItemLookUp.aspx", {
+                "ItemId": clean_isbn(query),
+                "itemIdType": "ISBN13" if len(clean_isbn(query)) == 13 else "ISBN",
+            })
+        else:
+            result = self._popular_product(query) if getattr(self,'_prefer_popular_edition',False) else None
+            if result is None:
+                result = self._api_request("ItemSearch.aspx", params)
         if not result or not result.get("item"):
             self.logger.search_complete(
                 query, found=False, method="api",
@@ -106,12 +163,19 @@ class AladinCrawler(BaseHttpCrawler):
 
         for item in result["item"]:
             title = item.get("title", "")
+            if self._expected_author and not author_matches(self._expected_author, item.get("author", "")):
+                continue
+            relevance = candidate_score(query, title, item.get("author", ""), self._expected_author)
+            if is_isbn(query):
+                relevance = 1.0 if clean_isbn(query) in (item.get("isbn"), item.get("isbn13")) else 0.0
+            if not relevance:
+                continue
             title_norm = normalize(title)
             sales_point = float(item.get("salesPoint", 0))
 
             # 1. 제목 유사도 점수 (0~1)
             similarity = difflib.SequenceMatcher(None, query_norm, title_norm).ratio()
-            score = similarity * 100
+            score = relevance * 1000
 
             # 2. 완전 일치 / 주제목 일치 / 권수 매칭 보너스
             # 주제목 추출 (콜론이나 대시 앞부분)
@@ -134,6 +198,12 @@ class AladinCrawler(BaseHttpCrawler):
             import math
             if sales_point > 0:
                 score += math.log10(sales_point) * 15
+            # Category metadata can reveal an adaptation hidden by a short
+            # product title. Prefer a general edition when one is available;
+            # children's originals remain discoverable if all editions are so.
+            category = item.get("categoryName", "")
+            if not is_isbn(query) and any(k in category and k not in query for k in ("어린이", "청소년", "중학생")):
+                score -= 150
 
             # 4. 제외 키워드 감점 (학습서, 중고 등)
             penalties = ["중학생", "초등", "어린이", "청소년", "워크북", "중고", "만화", "코믹스"]
@@ -157,7 +227,7 @@ class AladinCrawler(BaseHttpCrawler):
             )
             return None, ""
 
-        book_url = best_item.get("link", "")
+        book_url = html.unescape(best_item.get("link", ""))
         publisher = best_item.get("publisher", "")
         book_title = best_item.get("title", "")
         if publisher:
@@ -166,6 +236,7 @@ class AladinCrawler(BaseHttpCrawler):
         # itemId와 isbn13 저장 (get_rating, get_original_title_info에서 사용)
         self._current_item_id = best_item.get("itemId")
         self._current_isbn13 = best_item.get("isbn13")
+        self._current_item = best_item
 
         self.logger.search_complete(
             query, found=True, title=book_title,
@@ -243,9 +314,11 @@ class AladinCrawler(BaseHttpCrawler):
         params = {
             "itemIdType": "ItemId",
             "ItemId": item_id,
+            "OptResult": "ratingInfo",
         }
 
-        result = self._api_request("ItemLookUp.aspx", params)
+        current=getattr(self,'_current_item',{})
+        result={'item':[current]} if current.get('subInfo',{}).get('ratingInfo') else self._api_request("ItemLookUp.aspx", params)
         if not result or not result.get("item"):
             self.logger.debug("original_title_not_found", reason="no_item_in_response")
             return None
@@ -254,6 +327,7 @@ class AladinCrawler(BaseHttpCrawler):
         sub_info = item.get("subInfo", {})
         original_title = sub_info.get("originalTitle") or None
         author = item.get("author", "")
+        original_author, _ = self._parse_author(author)
         isbn13 = item.get("isbn13") or getattr(self, "_current_isbn13", None)
 
         self.logger.api_response("ItemLookUp.details", {"subInfo": sub_info, "author": author})
@@ -273,19 +347,15 @@ class AladinCrawler(BaseHttpCrawler):
                 # 번역서가 아닌 한국 원서 → 해외 플랫폼 검색 불필요
                 return None
             # 번역서인 경우 → 알라딘 해외도서에서 저자명으로 원서 검색
-            if author_name:
-                self.logger.debug(f"번역서 감지: {author_name} → 해외도서 검색")
-                foreign = self._search_foreign_edition(author_name)
-                if foreign:
-                    original_title = foreign["title"]
-                    isbn13 = foreign.get("isbn13") or isbn13
+            # An author's first foreign book is not evidence of this work.
+            # Keep the Korean ISBN so Open Library can follow Edition -> Work.
 
         if not original_title and not isbn13:
             return None
 
         return {
             "title": original_title,
-            "author": author,
+            "author": original_author or author,
             "isbn13": isbn13,
         }
 
@@ -306,7 +376,8 @@ class AladinCrawler(BaseHttpCrawler):
             "OptResult": "ratingInfo",
         }
 
-        result = self._api_request("ItemLookUp.aspx", params)
+        current=getattr(self,'_current_item',{})
+        result={'item':[current]} if current.get('subInfo',{}).get('ratingInfo') else self._api_request("ItemLookUp.aspx", params)
         if not result or not result.get("item"):
             self.logger.rating_complete(None, 0, method="api")
             return None, 0
@@ -319,7 +390,13 @@ class AladinCrawler(BaseHttpCrawler):
 
         rating = rating_info.get("ratingScore")
         # ratingCount: 별점 참여자 수 (commentReviewCount는 100자평 개수)
-        review_count = rating_info.get("ratingCount", 0)
+        from .utils import count_number
+        self.rating_count = count_number(rating_info.get("ratingCount"))
+        self.short_review_count = count_number(rating_info.get("commentReviewCount"))
+        self.text_review_count = count_number(rating_info.get("myReviewCount"))
+        review_count = self.rating_count or 0
+        self.book_isbn = item.get("isbn13") or item.get("isbn")
+        self.book_author = item.get("author")
 
         # API에서 ratingInfo가 없는 경우 customerReviewRank 사용
         if rating is None:
@@ -337,6 +414,7 @@ class AladinCrawler(BaseHttpCrawler):
         API 기반이므로 별도의 delay 불필요
         """
         self._current_attempt = attempt
+        self.reset_result()
         start = time.perf_counter()
         try:
             book_url, book_title = await self.search_book(query)
@@ -366,14 +444,7 @@ class AladinCrawler(BaseHttpCrawler):
                 attempt=attempt,
             )
 
-            return PlatformRating(
-                platform=self.name,
-                rating=rating,
-                rating_scale=self.rating_scale,
-                review_count=review_count,
-                url=book_url,
-                book_title=book_title,
-            )
+            return self.result_record(query, book_url, book_title, rating, review_count)
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start) * 1000
             self.logger.error("crawl_failed", str(e), {"query": query})

@@ -1,4 +1,5 @@
-"""LibraryThing HTTP 기반 크롤러 (cloudscraper 사용)"""
+"""LibraryThing Work Info API with verified-ISBN and HTML fallbacks."""
+from crawlers.transport import fetch_sync, FetchFailure, active_transport, librarything_api_delay
 
 import base64
 import json
@@ -13,14 +14,14 @@ import cloudscraper
 from bs4 import BeautifulSoup, Tag
 
 from .base_http import BaseHttpCrawler
-from .utils import is_isbn
+from .utils import is_isbn, clean_isbn, isbn13, isbn_matches, title_score, book_node, valid_rating, count_number
 
 
 class LibraryThingCrawler(BaseHttpCrawler):
     """
     LibraryThing 크롤러 (HTTP 기반)
 
-    cloudscraper를 사용하여 Cloudflare 우회.
+    공식 Work Info API를 먼저 조회하며 HTML은 보완 경로로 사용한다.
     """
 
     name = "librarything"
@@ -36,13 +37,91 @@ class LibraryThingCrawler(BaseHttpCrawler):
                 'desktop': True
             }
         )
-        # 세션 유지를 위해 홈 페이지 방문 시도 (쿠키 획득)
-        try:
-            self._scraper.get(self.base_url, timeout=5)
-        except: pass
         
         self._cached_rating: float | None = None
         self._cached_review_count: int = 0
+        self._site_blocked = False
+
+    def _work_info(self, identifier: str) -> tuple[str | None, str]:
+        """Official JSONP: exact ISBN -> work, 10-point score and review count.
+
+        The API does not include title/author or number of star ratings. Display
+        metadata comes from the upstream verified ISBN, never the copies field.
+        Parse only the fixed callback's JSON; never execute returned Javascript.
+        """
+        clean = clean_isbn(identifier).upper()
+        if not is_isbn(clean):
+            return None, ""
+        identifiers = list(dict.fromkeys(i for value in [clean, *getattr(self, "_related_isbns", ())]
+                                        if (i := isbn13(value))))[:40]
+        # A single upstream catalog work may be split into several LT works.
+        # Batch only ISBNs from that verified work, then prefer LT's main group.
+        url = f"{self.base_url}/api/json/workinfo.js?ids={','.join(identifiers)}&callback=LT_workinfo"
+        try:
+            response = fetch_sync(url, {"User-Agent": self.user_agent, "Accept": "application/javascript"})
+            if response is None:
+                time.sleep(librarything_api_delay())
+                request = urllib.request.Request(url, headers={"User-Agent": self.user_agent})
+                with urllib.request.urlopen(request, timeout=8) as page:
+                    text = page.read().decode("utf-8")
+            else:
+                text = response.text
+            match = re.search(r"(?:^|\n)LT_workinfo\((\{.*\})\);?\s*$", text, re.S)
+            if not match:
+                self.failure_status = "parse_error"
+                return None, ""
+            payload = json.loads(match.group(1))
+            candidates=[]
+            for requested in identifiers:
+                item = payload.get(requested)
+                if not isinstance(item, dict) or not item.get("work"):
+                    continue
+                work = str(item["work"])
+                if (item.get("type") != "isbn" or not isbn_matches(requested, [item.get("id", "")])
+                        or not work.isdigit() or int(work) <= 0
+                        or self._normalize_work_url(str(item.get("link", ""))) != f"{self.base_url}/work/{work}"):
+                    self.failure_status = "identity_mismatch"
+                    continue
+                score = valid_rating(item.get("rating"), 10)
+                if score is None:
+                    self.failure_status = "parse_error"
+                    continue
+                candidates.append((count_number(item.get("copies")) or 0, requested, work, score, item))
+            if not candidates:
+                return None, ""
+            # Catalog ISBN lists can contain an erroneous cross-work link. A
+            # single popular namesake must not beat the work supported by many
+            # independently numbered editions. ISBN-10/13 pairs were already
+            # collapsed above, so each vote represents one distinct ISBN.
+            support={work:sum(entry[2]==work for entry in candidates) for _,_,work,_,_ in candidates}
+            _, clean, work, score, item=max(candidates,key=lambda entry:(support[entry[2]],entry[0]))
+            self._cached_rating = score / 2 if score > 0 else None
+            self.text_review_count = count_number(item.get("reviews"))
+            self.rating_count = None
+            self._cached_review_count = self.text_review_count
+            self.book_isbn = clean
+            author = self._expected_author
+            self.book_author = author[0] if isinstance(author, list) and author else author or None
+            self._rating_loaded = True
+            self.failure_status = None
+            transport = active_transport()
+            if transport:
+                transport.diagnostics[self.name] = {"method":"workinfo_api", "isbn":clean,
+                    "work_id":work, "reported_scale":10, "metadata_source":"verified_isbn",
+                    "isbn_support":support[work], "candidate_works":len(support)}
+            return f"{self.base_url}/work/{work}", self._expected_title or clean
+        except FetchFailure as exc:
+            self.failure_status = exc.status
+        except (ValueError, TypeError, OSError):
+            self.failure_status = "parse_error"
+        return None, ""
+
+    def result_record(self, query, url, title, rating, count):
+        record = super().result_record(query, url, title, rating, count)
+        # LibraryThing aggregates editions as a work even for an ISBN lookup.
+        record.comparison_scope = "work"
+        record.edition_note = "ISBN이 연결된 작품 전체 평가" if self._rating_loaded and self.book_isbn else "작품 전체 평가"
+        return record
 
     def _fetch_with_scraper(
         self,
@@ -57,43 +136,23 @@ class LibraryThingCrawler(BaseHttpCrawler):
         if is_xhr:
             headers["X-Requested-With"] = "XMLHttpRequest"
 
-        last_error: Exception | None = None
-        for attempt in range(3):
-            try:
-                response = self._scraper.get(
-                    url,
-                    timeout=15,
-                    allow_redirects=True,
-                    headers=headers or None,
-                )
-                if response.status_code in {429, 503} and attempt < 2:
-                    time.sleep(0.8 * (attempt + 1))
-                    continue
-
-                if self._is_cloudflare_challenge(response.text):
-                    preview = re.sub(r"\s+", " ", response.text[:200]).strip()
-                    self.logger.error(
-                        "cloudflare_challenge",
-                        f"LibraryThing challenge page detected status={response.status_code} "
-                        f"url={response.url} response_preview={preview}",
-                    )
-                    if attempt < 2:
-                        time.sleep(0.8 * (attempt + 1))
-                        continue
-                    raise RuntimeError("LibraryThing challenge page detected")
-
-                response.raise_for_status()
-                return response.text, response.url
-            except Exception as e:
-                last_error = e
-                if attempt < 2:
-                    time.sleep(0.8 * (attempt + 1))
-                    continue
-                raise
-
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError("LibraryThing 요청 실패")
+        if self._site_blocked:
+            raise FetchFailure("blocked")
+        try:
+            shared = fetch_sync(url, {"User-Agent": self.user_agent, **headers})
+        except FetchFailure as exc:
+            self._site_blocked = exc.status == "blocked"
+            raise
+        if shared is not None:
+            return shared.text, shared.url
+        response = self._scraper.get(
+            url, timeout=8, allow_redirects=True, headers=headers or None,
+        )
+        response.raise_for_status()
+        if self._is_cloudflare_challenge(response.text):
+            # Repeating an identical challenge request only adds latency.
+            raise RuntimeError("LibraryThing challenge page detected")
+        return response.text, response.url
 
     def _is_cloudflare_challenge(self, html: str) -> bool:
         """Cloudflare 챌린지 페이지 여부 확인"""
@@ -119,6 +178,9 @@ class LibraryThingCrawler(BaseHttpCrawler):
 
     def search_by_identifier(self, identifier: str) -> tuple[str | None, str]:
         """ISBN으로 직접 작품 페이지 접근"""
+        result = self._work_info(identifier)
+        if result[0]:
+            return result
         clean = identifier.replace("-", "").replace(" ", "")
         url = f"{self.base_url}/isbn/{clean}"
 
@@ -128,7 +190,8 @@ class LibraryThingCrawler(BaseHttpCrawler):
                 return None, ""
             
             title, rating, review_count = self._parse_work_page(html)
-            if title:
+            if title and self.verify_detail(BeautifulSoup(html, "html.parser"), title, identifier):
+                self._rating_loaded = True
                 self._cached_rating = rating
                 self._cached_review_count = review_count
                 return str(final_url), title
@@ -138,6 +201,10 @@ class LibraryThingCrawler(BaseHttpCrawler):
 
     def search_by_keyword(self, keyword: str) -> tuple[str | None, str]:
         """제목으로 검색"""
+        if self._preferred_isbn:
+            result = self._work_info(self._preferred_isbn)
+            if result[0]:
+                return result
         encoded = urllib.parse.quote(keyword)
         
         # 방법 1: /title/ 직접 접근
@@ -146,7 +213,8 @@ class LibraryThingCrawler(BaseHttpCrawler):
             html, final_url = self._fetch_with_scraper(title_url)
             if "/work/" in str(final_url):
                 title, rating, review_count = self._parse_work_page(html)
-                if title:
+                if title and self._is_title_match(keyword, title) and self.verify_detail(BeautifulSoup(html, "html.parser"), title, keyword):
+                    self._rating_loaded = True
                     self._cached_rating = rating
                     self._cached_review_count = review_count
                     return str(final_url), title
@@ -231,13 +299,14 @@ class LibraryThingCrawler(BaseHttpCrawler):
             link for link in links
             if self._is_title_match(query, link.get_text(strip=True))
         ]
-        pool = matched or links
-        return max(pool, key=lambda link: self._extract_rating_from_search_link(link)[1])
+        return max(matched, key=lambda link: self._extract_rating_from_search_link(link)[1], default=None)
 
     def _search_via_search_page(self, keyword: str) -> tuple[str | None, str]:
         """검색 페이지를 통한 검색 및 폴백"""
+        if self._site_blocked:
+            return self._search_via_fallback(keyword)
         encoded = urllib.parse.quote(keyword)
-        search_url = f"{self.base_url}/search.php?term={encoded}&searchtype=newwork_titles&sortchoice=0"
+        search_url = f"{self.base_url}/search.php?search={encoded}&searchtype=newwork_titles&sortchoice=0"
         
         html = self._fetch_search_results(search_url)
         link = self._find_link_in_html(html, keyword)
@@ -251,7 +320,7 @@ class LibraryThingCrawler(BaseHttpCrawler):
             if primary != keyword:
                 self.logger.debug(f"주제목으로 재시도: {primary}")
                 encoded_primary = urllib.parse.quote(primary)
-                search_url = f"{self.base_url}/search.php?term={encoded_primary}&searchtype=newwork_titles&sortchoice=0"
+                search_url = f"{self.base_url}/search.php?search={encoded_primary}&searchtype=newwork_titles&sortchoice=0"
                 html = self._fetch_search_results(search_url)
                 link = self._find_link_in_html(html, primary)
                 if not link:
@@ -264,8 +333,8 @@ class LibraryThingCrawler(BaseHttpCrawler):
                 href = f"{self.base_url}{href}"
             title = link.get_text(strip=True) or keyword
             rating, review_count = self._extract_rating_from_search_link(link)
-            self._cached_rating = rating
-            self._cached_review_count = review_count
+            # Search-row values are not a verified detail-page aggregate.
+            self._selected_title = title
             return href, title
 
         # Cloudflare 등으로 직접 크롤링이 막히는 환경(Railway)에서 검색 엔진 결과 URL로 우회
@@ -289,6 +358,8 @@ class LibraryThingCrawler(BaseHttpCrawler):
         if url.startswith("/"):
             url = f"{self.base_url}{url}"
 
+        if urllib.parse.urlparse(url).hostname not in {"librarything.com", "www.librarything.com"}:
+            return None
         work_id_match = re.search(r"/work/\d+", url)
         if not work_id_match:
             return None
@@ -325,8 +396,12 @@ class LibraryThingCrawler(BaseHttpCrawler):
             payload: dict | None = None
             for attempt in range(2):
                 try:
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        payload = json.loads(resp.read().decode("utf-8"))
+                    shared = fetch_sync(url, dict(req.header_items()))
+                    if shared is not None:
+                        payload = json.loads(shared.text)
+                    else:
+                        with urllib.request.urlopen(req, timeout=10) as resp:
+                            payload = json.loads(resp.read().decode("utf-8"))
                     break
                 except urllib.error.HTTPError as e:
                     if e.code == 429 and attempt < 1:
@@ -356,8 +431,9 @@ class LibraryThingCrawler(BaseHttpCrawler):
                     continue
 
                 title = str(item.get("title", "")).replace(" | LibraryThing", "").strip()
-                if not title:
-                    title = keyword
+                if not title or not self._is_title_match(keyword, title):
+                    continue
+                self._selected_title = title
                 return work_url, title
 
         return None, ""
@@ -370,8 +446,12 @@ class LibraryThingCrawler(BaseHttpCrawler):
         try:
             req = urllib.request.Request(url)
             req.add_header("User-Agent", self.user_agent)
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                html = resp.read().decode("utf-8", errors="replace")
+            shared = fetch_sync(url, {"User-Agent": self.user_agent})
+            if shared is not None:
+                html = shared.text
+            else:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    html = resp.read().decode("utf-8", errors="replace")
         except Exception as e:
             self.logger.debug("DuckDuckGo request failed", error=str(e))
             return None, ""
@@ -383,8 +463,9 @@ class LibraryThingCrawler(BaseHttpCrawler):
                 continue
 
             title = link.get_text(" ", strip=True).replace(" | LibraryThing", "").strip()
-            if not title:
-                title = keyword
+            if not title or not self._is_title_match(keyword, title):
+                continue
+            self._selected_title = title
             return work_url, title
 
         return None, ""
@@ -427,44 +508,51 @@ class LibraryThingCrawler(BaseHttpCrawler):
         return self._select_best_link(deduped, query)
 
     def _is_title_match(self, query: str, result_title: str) -> bool:
-        """제목 일치 여부 확인"""
-        q = query.lower().strip()
-        t = result_title.lower().strip()
-        if q == t or q in t or t in q:
-            return True
-        
-        # 특수문자 제거 후 단어 단위 매칭
-        q_words = set(re.sub(r'[:\-]', ' ', q).split())
-        t_words = set(re.sub(r'[:\-]', ' ', t).split())
-        return bool(q_words and q_words.issubset(t_words))
+        return bool(title_score(query, re.split(r"\s+by\s+", result_title, flags=re.I)[0]))
 
     def _parse_work_page(self, html: str) -> tuple[str, float | None, int]:
-        """작품 페이지 파싱"""
         soup = BeautifulSoup(html, "html.parser")
-        title = ""
-        h1 = soup.select_one("h1")
-        if h1:
-            title = h1.get_text(strip=True)
-
-        rating = None
-        review_count = 0
-
-        # 평점 추출
-        rating_match = re.search(r'\((\d+\.\d+)\)', html)
-        if rating_match:
-            try:
-                rating = float(rating_match.group(1))
-            except: pass
-
-        # 리뷰 수 추출
-        review_match = re.search(r'>(\d[\d,]*)\s*Reviews</a>', html)
-        if review_match:
-            review_count = int(review_match.group(1).replace(",", ""))
-        return title, rating, review_count
+        heading = soup.select_one("h1")
+        title = heading.get_text(" ", strip=True) if heading else ""
+        node = book_node(soup, title) or {}
+        aggregate = node.get("aggregateRating", {})
+        rating = valid_rating(aggregate.get("ratingValue"), 5, aggregate.get("bestRating"))
+        self.rating_count = count_number(aggregate.get("ratingCount"))
+        self.text_review_count = count_number(aggregate.get("reviewCount"))
+        # Current header scoreboard: do not scan prices or member-review text.
+        header = heading.find_parent(class_="pagecard") if heading else None
+        scoreboard = header.select_one(".lt_scoreboard") if header else None
+        if scoreboard:
+            widget = scoreboard.select_one(".scoreboard_item .rating[title]")
+            if widget:
+                match = re.search(r"\((\d+(?:\.\d+)?)\)", widget.parent.get_text(" ", strip=True))
+                if match:
+                    rating = valid_rating(match.group(1), 5)
+            for item in scoreboard.select(".scoreboard_item"):
+                match = re.fullmatch(r"\s*([\d,]+)\s+Reviews?\s*", item.get_text(" ", strip=True), re.I)
+                if match:
+                    self.text_review_count = count_number(match.group(1))
+        stats = soup.select_one('[itemprop="aggregateRating"], #bookstats, #bookrating, #ratingstats, .bookstats')
+        if stats:
+            score = stats.select_one('[itemprop="ratingValue"]')
+            if score:
+                rating = valid_rating(score.get("content") or score.get_text(strip=True), 5)
+            elif rating is None:
+                match = re.search(r"(?:average rating|avg\.? rating)\s*[:(]?\s*(\d+(?:\.\d+)?)", stats.get_text(" ", strip=True), re.I)
+                rating = valid_rating(match.group(1), 5) if match else None
+            count = stats.select_one('[itemprop="ratingCount"]')
+            if count:
+                self.rating_count = count_number(count.get("content") or count.get_text(strip=True))
+        reviews = soup.select_one('a[href$="/reviews"]')
+        if reviews and re.search(r"reviews?", reviews.get_text(), re.I):
+            match = re.search(r"([\d,]+)\s*reviews?", reviews.get_text(), re.I)
+            if match:
+                self.text_review_count = count_number(match.group(1))
+        return title, rating, self.rating_count if self.rating_count is not None else self.text_review_count or 0
 
     async def get_rating(self, url: str) -> tuple[float | None, int]:
         """평점 반환 (캐시 사용)"""
-        if self._cached_rating is not None or self._cached_review_count > 0:
+        if self._rating_loaded or self._cached_rating is not None:
             self.logger.rating_complete(
                 self._cached_rating, self._cached_review_count, method="cloudscraper",
                 rating_scale=self.rating_scale
@@ -473,7 +561,11 @@ class LibraryThingCrawler(BaseHttpCrawler):
 
         try:
             html, _ = self._fetch_with_scraper(url)
-            _, rating, review_count = self._parse_work_page(html)
+            title, rating, review_count = self._parse_work_page(html)
+            expected = self._expected_title or getattr(self, "_selected_title", None)
+            if not self.verify_detail(BeautifulSoup(html, "html.parser"), title, expected):
+                return None, 0
+            self._rating_loaded = True
             self.logger.rating_complete(rating, review_count, method="cloudscraper", rating_scale=self.rating_scale)
             return rating, review_count
         except Exception:

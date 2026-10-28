@@ -1,199 +1,324 @@
-"""기존 크롤러를 래핑하는 서비스 레이어"""
-
+"""Validated concurrent search with source caches and shared in-flight jobs."""
 import asyncio
 import uuid
-import sys
-import os
-
-# 프로젝트 루트를 Python 경로에 추가 (api/ 하위에서 crawlers/ 접근)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+from dataclasses import dataclass, fields
+from datetime import datetime
+import time
 
 from crawler_logging import CrawlerLogger
-from crawlers import (
-    AladinCrawler,
-    KyoboCrawler,
-    Yes24Crawler,
-    SarakCrawler,
-    WatchaCrawler,
-    GoodreadsCrawler,
-    AmazonCrawler,
-    LibraryThingCrawler,
-)
-from crawlers.base import BaseCrawler
-from crawlers.foreign_resolver import resolve_foreign_query, ForeignQuery
+from crawlers import AladinCrawler, KyoboCrawler, Yes24Crawler, SarakCrawler, WatchaCrawler, GoodreadsCrawler, AmazonCrawler, LibraryThingCrawler
+from crawlers.foreign_resolver import resolve_foreign_query
+from crawlers.work_identity import resolve_work_identity, WorkIdentity
+from crawlers.transport import SearchTransport, run_parser, active_transport
+from crawlers.utils import is_isbn, author_matches
 from models.book import BookSearchResult, PlatformRating
+from api import platform_cache, source_identity
+from .volume_service import collect_volumes
 
-# 크롤러 레지스트리
-CRAWLERS: dict[str, type[BaseCrawler]] = {
-    "aladin": AladinCrawler,
-    "kyobo": KyoboCrawler,
-    "yes24": Yes24Crawler,
-    "sarak": SarakCrawler,
-    "watcha": WatchaCrawler,
-    "goodreads": GoodreadsCrawler,
-    "amazon": AmazonCrawler,
-    "librarything": LibraryThingCrawler,
-}
-
+CRAWLERS = {"aladin": AladinCrawler, "kyobo": KyoboCrawler, "yes24": Yes24Crawler, "sarak": SarakCrawler, "watcha": WatchaCrawler, "goodreads": GoodreadsCrawler, "amazon": AmazonCrawler, "librarything": LibraryThingCrawler}
 FOREIGN_PLATFORMS = {"goodreads", "amazon", "librarything"}
-
 logger = CrawlerLogger("api")
+PLATFORM_TIMEOUT = 18
+RESOLVE_TIMEOUT = 16
+REASONS = {"not_found": "일치하는 책을 찾지 못했습니다", "identity_mismatch": "상품·제목·ISBN이 일치하지 않습니다",
+           "blocked": "사이트에서 수집을 차단하거나 요청을 제한했습니다", "timeout": "응답 대기 시간을 초과했습니다",
+           "parse_error": "사이트 응답에서 책 또는 평점 정보를 확인하지 못했습니다", "network_error": "사이트 연결에 실패했습니다",
+           "unavailable": "원서 정보를 확인하지 못했습니다"}
 
 
-async def crawl_platform(
-    crawler_cls: type[BaseCrawler],
-    query: str,
-    fallback_query: str | None = None,
-    original_query: str | None = None,
-    execution_id: str | None = None,
-) -> PlatformRating | None:
-    """단일 플랫폼 크롤링 (스레드 기반 병렬 실행)"""
-    session_id = uuid.uuid4().hex[:8]
-    orig = original_query or query
-
-    async def _execute():
+async def crawl_platform(crawler_cls, query, fallback_query=None, original_query=None, execution_id=None,
+                         expected_author=None, on_failure=None, identity_title=None, identity_isbn=None,
+                         related_isbns=(), strict_edition=False, prefer_popular=False, verified_product=None):
+    async def execute():
         async with crawler_cls() as crawler:
-            crawler.set_session(session_id, orig, execution_id=execution_id)
+            crawler.set_session(uuid.uuid4().hex[:8], original_query or query, execution_id=execution_id)
+            expected_title = identity_title or (fallback_query if fallback_query and not is_isbn(fallback_query) else (query if not is_isbn(query) else None))
+            crawler.expected_identity(expected_title, expected_author, strict_isbn=strict_edition or is_isbn(original_query or query))
+            crawler._preferred_isbn = identity_isbn
+            crawler._related_isbns = related_isbns if not is_isbn(original_query or query) else ()
+            crawler._prefer_popular_edition=prefer_popular
+            crawler._verified_product=verified_product
             result = await crawler.crawl(query, attempt=1)
-            if result is None and fallback_query and fallback_query != query:
+            first_failure = crawler.failure_status
+            if result is None and fallback_query and fallback_query != query and not is_isbn(original_query or ""):
+                crawler.failure_status = None
                 result = await crawler.crawl(fallback_query, attempt=2)
-            return result
+            rank={"identity_mismatch":6,"blocked":5,"timeout":4,"network_error":4,"parse_error":3,"not_found":1,None:0}
+            failure=max((first_failure,crawler.failure_status),key=lambda value:rank.get(value,2))
+            return result, failure
+    (result, failure), network_failure = await run_parser(lambda: asyncio.run(execute()))
+    rank={"identity_mismatch":6,"blocked":5,"timeout":4,"network_error":4,"parse_error":3,"not_found":1,None:0}
+    failure=max((failure,network_failure),key=lambda value:rank.get(value,2))
+    if on_failure and failure:
+        on_failure(failure)
+    return result
 
-    return await asyncio.to_thread(lambda: asyncio.run(_execute()))
+
+def rating_dict(rating):
+    return BookSearchResult(query="", results=[rating]).to_dict()["results"][0]
 
 
-async def crawl_all(
-    query: str, platforms: list[str] | None = None
-) -> BookSearchResult:
-    """
-    여러 플랫폼에서 병렬 크롤링
+def rating_from_dict(value):
+    allowed = {f.name for f in fields(PlatformRating)}
+    payload = {key: item for key, item in value.items() if key in allowed}
+    if isinstance(payload.get("crawled_at"), str):
+        payload["crawled_at"] = datetime.fromisoformat(payload["crawled_at"])
+    return PlatformRating(**payload)
 
-    main.py의 crawl_all_platforms()와 동일한 로직.
-    """
+
+async def _platform_results(query, platforms=None, on_status=None, force_refresh=False, cache=None):
+    selected = list(dict.fromkeys(platforms if platforms is not None else CRAWLERS))
     execution_id = uuid.uuid4().hex[:8]
-    logger.set_execution_id(execution_id)
+    foreign_task = None
+    identity_task = None
+    cache_writes = []
 
-    if platforms is None:
-        platforms = list(CRAWLERS.keys())
+    async def run(platform):
+        nonlocal foreign_task, identity_task
+        failure = []
+        result = None
+        status = "not_found"
+        trusted_product=False
+        if cache and not force_refresh:
+            cached = await platform_cache.read(cache, query, platform)
+            if cached:
+                if on_status:
+                    on_status({"platform": platform, "status": cached["status"], "reason": cached["reason"], "source": "cache"})
+                return rating_from_dict(cached["rating"]) if cached.get("rating") else None
+        try:
+            if platform=='amazon' and not is_isbn(query):
+                product=await source_identity.read(cache,query,platform)
+                if product:
+                    if identity_task is None:
+                        identity_task=asyncio.create_task(resolve_work_identity(query))
+                    try:
+                        local=await asyncio.wait_for(asyncio.shield(identity_task),3)
+                        if local.author and author_matches(local.author,product['local_author']):
+                            trusted_product=True
+                            used_detail=False
+                            deadline=time.monotonic()+9
+                            for candidate in [product,*product.get('alternates',[])]:
+                                remaining=deadline-time.monotonic()
+                                if remaining<=0.05:
+                                    break
+                                try:
+                                    result=await asyncio.wait_for(crawl_platform(AmazonCrawler,candidate['url'].rsplit('/',1)[-1],
+                                        original_query=query,execution_id=execution_id,expected_author=candidate['source_author'],
+                                        identity_title=source_identity.validation_title(candidate['title']),
+                                        verified_product=candidate,on_failure=failure.append),min(4,remaining))
+                                except asyncio.TimeoutError:
+                                    result=None
+                                    failure.append('timeout')
+                                if result and result.rating is not None:
+                                    result.book_title=candidate['title']
+                                    result.edition_note='확인한 상품 판본 · 집계 평점 재조회'
+                                    used_detail=True
+                                    break
+                            if not result or result.rating is None:
+                                # Retry the verified work title, not an arbitrary
+                                # catalog ISBN that may name a tiny translation.
+                                title=source_identity.validation_title(product['title'])
+                                result=await asyncio.wait_for(crawl_platform(AmazonCrawler,title,
+                                    original_query=query,execution_id=execution_id,expected_author=product['source_author'],
+                                    identity_title=title,on_failure=failure.append),4)
+                            if result and result.rating is not None:
+                                transport=active_transport()
+                                if transport:
+                                    diagnostic=transport.diagnostics.setdefault('amazon',{})
+                                    if used_detail and diagnostic.get('method')!='verified_product_popover':
+                                        diagnostic['method']='verified_product_detail'
+                                    diagnostic.update({'identity_provenance':product['provenance'],'identity_observed_at':product.get('observed_at')})
+                    except asyncio.TimeoutError:
+                        result=None
+                        failure.append('timeout')
+                    except Exception:
+                        result=None
+            if platform in FOREIGN_PLATFORMS:
+                foreign=None
+                if not trusted_product:
+                    if foreign_task is None:
+                        foreign_task = asyncio.create_task(resolve_foreign_query(query))
+                    foreign = await asyncio.wait_for(asyncio.shield(foreign_task), RESOLVE_TIMEOUT)
+                    if not foreign.available and not foreign.isbn:
+                        status = "unavailable"
+                        foreign=None
+                if foreign:
+                    source_query = (foreign.query or foreign.isbn) if not is_isbn(query) else foreign.isbn or foreign.query
+                    fallback = foreign.isbn if source_query == foreign.query else foreign.query
+                    result = await asyncio.wait_for(crawl_platform(CRAWLERS[platform], source_query,
+                        fallback, original_query=query, execution_id=execution_id,
+                        expected_author=foreign.author, identity_isbn=foreign.isbn,
+                        related_isbns=foreign.related_isbns,
+                        on_failure=failure.append), PLATFORM_TIMEOUT)
+                    transport=active_transport()
+                    method=(transport.diagnostics.get('amazon',{}) if transport else {}).get('method')
+                    if platform=='amazon' and not is_isbn(query) and result and result.rating is not None and method=='verified_search_card':
+                        if identity_task is None:
+                            identity_task=asyncio.create_task(resolve_work_identity(query))
+                        try:
+                            local=await asyncio.wait_for(asyncio.shield(identity_task),3)
+                            if local.author and result.author and foreign.author and author_matches(foreign.author,result.author,strict_script=True):
+                                cache_writes.append(asyncio.create_task(source_identity.write(cache,{'version':1,'platform':'amazon',
+                                    'query':query,'title':result.book_title,'source_author':result.author,'local_author':local.author,
+                                    'url':result.url,'provenance':'server_verified_search_card','observed_at':datetime.now().isoformat(),
+                                    'expires_at':time.time()+source_identity.TTL})))
+                        except Exception:
+                            pass
+            else:
+                if identity_task is None:
+                    identity_task = asyncio.create_task(resolve_work_identity(query))
+                try:
+                    identity = await asyncio.wait_for(asyncio.shield(identity_task), 3)
+                except Exception:
+                    identity = WorkIdentity()
+                # Reuse the catalog's edition identifier where supported. If
+                # that edition is unavailable, retry the title under the same
+                # author constraint. Watcha uses a title-based book catalog.
+                if not is_isbn(query) and not identity.isbn and not identity.author:
+                    reason="비교할 작품의 저자·판본을 확인하지 못했습니다"
+                    if on_status:
+                        on_status({"platform":platform,"status":"unavailable","reason":reason,"source":"crawl"})
+                    if cache:
+                        cache_writes.append(asyncio.create_task(platform_cache.write(cache,query,platform,"unavailable",None,reason)))
+                    return None
+                source_query = query
+                if platform == "watcha":
+                    source_query = identity.title or query
+                if platform in {'kyobo','aladin','yes24','sarak'} and len(identity.editions)>1:
+                    async def volume(edition,on_failure):
+                        return await crawl_platform(CRAWLERS[platform],edition['isbn'],
+                            original_query=query,execution_id=execution_id,expected_author=identity.author,
+                            identity_title=edition['title'],identity_isbn=edition['isbn'],strict_edition=True,on_failure=on_failure)
+                    result=await collect_volumes(platform,identity,volume,rating_dict,PLATFORM_TIMEOUT,failure.append)
+                else:
+                    result = await asyncio.wait_for(crawl_platform(CRAWLERS[platform], source_query,
+                        fallback_query=query if source_query != query and platform != "watcha" else None, original_query=query,
+                        execution_id=execution_id, expected_author=identity.author, identity_title=identity.title,
+                        identity_isbn=identity.isbn,
+                        prefer_popular=platform=='aladin' and not is_isbn(query),
+                        on_failure=failure.append), PLATFORM_TIMEOUT)
+            if result and ((result.rating is not None and result.review_count is not None) or result.rating_count == 0 or result.text_review_count == 0):
+                status = "done"
+            elif failure:
+                status = failure[-1]
+            elif result:
+                status = "parse_error"
+            if result and result.volume_results and not result.aggregate_complete:
+                status='parse_error'
+        except asyncio.TimeoutError:
+            status = "timeout"
+        except Exception:
+            logger.error("crawl_failed", "Platform lookup failed", {"platform": platform})
+            status = "network_error"
+        reason = result.edition_note if result and result.volume_results and not result.aggregate_complete else REASONS.get(status)
+        if on_status:
+            on_status({"platform": platform, "status": status, "reason": reason, "source": "crawl"})
+        if cache:
+            cache_writes.append(asyncio.create_task(platform_cache.write(cache, query, platform, status,
+                                rating_dict(result) if result else None, reason)))
+        return result
 
-    valid_platforms = [p for p in platforms if p in CRAWLERS]
-    if not valid_platforms:
-        return BookSearchResult(query=query)
-
-    # 해외 플랫폼 검색어 해석
-    foreign = ForeignQuery()
-    has_foreign = any(p in FOREIGN_PLATFORMS for p in valid_platforms)
-    if has_foreign:
-        foreign = await resolve_foreign_query(query)
-
-    # 태스크 생성
-    tasks = []
-    task_platforms = []
-    for p in valid_platforms:
-        if p in FOREIGN_PLATFORMS:
-            if foreign.isbn:
-                tasks.append(crawl_platform(
-                    CRAWLERS[p], foreign.isbn, foreign.query,
-                    original_query=query, execution_id=execution_id
-                ))
-                task_platforms.append(p)
-            elif foreign.query:
-                tasks.append(crawl_platform(
-                    CRAWLERS[p], foreign.query,
-                    original_query=query, execution_id=execution_id
-                ))
-                task_platforms.append(p)
-        else:
-            tasks.append(crawl_platform(
-                CRAWLERS[p], query,
-                original_query=query, execution_id=execution_id
-            ))
-            task_platforms.append(p)
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    search_result = BookSearchResult(query=query)
-    for platform, result in zip(task_platforms, results):
-        if isinstance(result, Exception):
-            logger.error("crawl_failed", str(result), {"platform": platform})
-        elif result is not None:
-            search_result.add_result(result)
-
-    return search_result
+    tasks = [asyncio.create_task(run(p)) for p in selected if p in CRAWLERS]
+    try:
+        for task in asyncio.as_completed(tasks):
+            result = await task
+            if result is not None:
+                yield result
+        if cache_writes:
+            await asyncio.gather(*cache_writes, return_exceptions=True)
+    finally:
+        pending = tasks + ([foreign_task] if foreign_task else []) + ([identity_task] if identity_task else []) + cache_writes
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
-async def crawl_all_stream(
-    query: str, platforms: list[str] | None = None
-):
-    """
-    여러 플랫폼에서 병렬 크롤링 - 결과를 하나씩 yield
+@dataclass
+class SearchJob:
+    task: asyncio.Task | None
+    events: list
+    listeners: set
 
-    Yields:
-        dict: 각 플랫폼 결과 (PlatformRating.to_dict() 형태)
-    """
-    execution_id = uuid.uuid4().hex[:8]
-    logger.set_execution_id(execution_id)
 
-    if platforms is None:
-        platforms = list(CRAWLERS.keys())
+_jobs = {}
 
-    valid_platforms = [p for p in platforms if p in CRAWLERS]
-    if not valid_platforms:
-        return
 
-    # 해외 플랫폼 검색어 해석
-    foreign = ForeignQuery()
-    has_foreign = any(p in FOREIGN_PLATFORMS for p in valid_platforms)
-    if has_foreign:
-        foreign = await resolve_foreign_query(query)
+async def _subscribe(query, platforms=None, force_refresh=False, cache=None):
+    selected = tuple(sorted(platforms if platforms is not None else CRAWLERS))
+    key = (query.casefold(), selected, force_refresh)
+    loop = asyncio.get_running_loop()
+    job = _jobs.get(key)
+    if job and job.task.get_loop() is not loop:
+        job = None
+    if job is None:
+        job = SearchJob(None, [], set())
+        _jobs[key] = job
 
-    # 태스크 생성
-    pending = set()
-    for p in valid_platforms:
-        if p in FOREIGN_PLATFORMS:
-            if foreign.isbn:
-                task = asyncio.create_task(crawl_platform(
-                    CRAWLERS[p], foreign.isbn, foreign.query,
-                    original_query=query, execution_id=execution_id
-                ))
-                pending.add(task)
-            elif foreign.query:
-                task = asyncio.create_task(crawl_platform(
-                    CRAWLERS[p], foreign.query,
-                    original_query=query, execution_id=execution_id
-                ))
-                pending.add(task)
-        else:
-            task = asyncio.create_task(crawl_platform(
-                CRAWLERS[p], query,
-                original_query=query, execution_id=execution_id
-            ))
-            pending.add(task)
+        def emit(event, data):
+            item = (event, data)
+            job.events.append(item)
+            for queue in list(job.listeners):
+                queue.put_nowait(item)
 
-    # 완료되는 순서대로 yield
-    while pending:
-        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
+        async def collect():
             try:
-                result = task.result()
-                if result is not None:
-                    yield {
-                        "platform": result.platform,
-                        "rating": result.rating,
-                        "rating_scale": result.rating_scale,
-                        "normalized_rating": result.normalized_rating,
-                        "review_count": result.review_count,
-                        "book_title": result.book_title,
-                        "url": result.url,
-                        "crawled_at": result.crawled_at.isoformat(),
-                    }
-            except Exception as e:
-                logger.error("crawl_failed", str(e))
+                async with SearchTransport() as transport:
+                    async for rating in _platform_results(query, selected, lambda value: emit("status", value), force_refresh, cache):
+                        emit("rating", rating)
+                    emit("metrics", {"http_requests": sum(transport.counts.values()), "requests_by_domain": dict(transport.counts),
+                                     "diagnostics": transport.diagnostics})
+            except Exception:
+                emit("error", "검색 중 오류가 발생했습니다")
+            finally:
+                emit("done", None)
+                if _jobs.get(key) is job:
+                    _jobs.pop(key, None)
+        job.task = asyncio.create_task(collect())
+    queue = asyncio.Queue()
+    for item in job.events:
+        queue.put_nowait(item)
+    job.listeners.add(queue)
+    try:
+        while True:
+            event, data = await queue.get()
+            if event == "done":
+                return
+            if event == "error":
+                raise RuntimeError(data)
+            yield event, data
+    finally:
+        job.listeners.discard(queue)
+        if not job.listeners and not job.task.done():
+            job.task.cancel()
+            await asyncio.gather(job.task, return_exceptions=True)
 
 
-def get_available_platforms() -> list[dict]:
-    """사용 가능한 플랫폼 목록"""
-    return [
-        {"name": name, "type": "foreign" if name in FOREIGN_PLATFORMS else "domestic"}
-        for name in CRAWLERS
-    ]
+async def crawl_all(query, platforms=None, force_refresh=False, cache=None):
+    result = BookSearchResult(query=query)
+    subscription = _subscribe(query, platforms, force_refresh, cache)
+    try:
+        async for event, data in subscription:
+            if event == "rating":
+                result.add_result(data)
+    finally:
+        await subscription.aclose()
+    return result
+
+
+async def crawl_all_stream(query, platforms=None, on_status=None, force_refresh=False, cache=None, on_metrics=None):
+    subscription = _subscribe(query, platforms, force_refresh, cache)
+    try:
+        async for event, data in subscription:
+            if event == "rating":
+                yield rating_dict(data)
+            elif event == "status" and on_status:
+                on_status(data)
+            elif event == "metrics" and on_metrics:
+                on_metrics(data)
+    finally:
+        await subscription.aclose()
+
+
+def get_available_platforms():
+    return [{"name": name, "type": "foreign" if name in FOREIGN_PLATFORMS else "domestic"} for name in CRAWLERS]

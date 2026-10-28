@@ -194,7 +194,7 @@ def print_results(result: BookSearchResult) -> None:
         # 10점 만점으로 정규화하여 표시
         rating_str = f"{r.normalized_rating}/10" if r.normalized_rating is not None else "N/A"
         print(f"\n[{r.platform}] {r.book_title}")
-        print(f"  평점: {rating_str} | 리뷰: {r.review_count:,}개")
+        print(f"  평점: {rating_str} | 리뷰: {r.review_count if r.review_count is not None else '미확인'}")
         print(f"  URL: {r.url}")
 
     print(f"\n{'-' * 60}")
@@ -205,7 +205,7 @@ def print_results(result: BookSearchResult) -> None:
         avg_rating = sum(ratings) / len(ratings)
         print(f"\n평균 평점 (10점 만점): {avg_rating:.2f}")
 
-    total_reviews = sum(r.review_count for r in result.results)
+    total_reviews = sum(r.review_count or 0 for r in result.results)
     print(f"총 리뷰 수: {total_reviews:,}개")
 
 

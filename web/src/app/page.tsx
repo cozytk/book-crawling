@@ -1,404 +1,149 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import dynamic from "next/dynamic";
+const ReactMarkdown = dynamic(() => import("react-markdown"));
 import SearchForm from "@/components/SearchForm";
 import RatingGrid from "@/components/RatingGrid";
-import LoadingSkeleton from "@/components/LoadingSkeleton";
-import {
-  searchBookStream,
-  checkCache,
-  PlatformRating,
-  PLATFORM_META,
-} from "@/lib/api";
 import BookmarkButton from "@/components/BookmarkButton";
-import ReactMarkdown from "react-markdown";
+import { searchBookStream, PLATFORM_META, PlatformRating, PlatformStatus, SearchResult } from "@/lib/api";
 
-type SortOption = "rating_desc" | "rating_asc" | "reviews_desc" | "reviews_asc";
-
-const SORT_OPTIONS: { value: SortOption; label: string }[] = [
-  { value: "rating_desc", label: "평점 높은 순" },
-  { value: "rating_asc", label: "평점 낮은 순" },
-  { value: "reviews_desc", label: "리뷰 많은 순" },
-  { value: "reviews_asc", label: "리뷰 적은 순" },
-];
-
-const ALL_PLATFORMS = Object.keys(PLATFORM_META);
+const ALL = Object.keys(PLATFORM_META);
+const DOMESTIC = ["aladin", "kyobo", "yes24", "sarak"];
+const FOREIGN = ["goodreads", "amazon", "librarything"];
+const EXAMPLES = ["데미안", "사피엔스", "클린 코드"];
 
 export default function Home() {
-  const router = useRouter();
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<string[]>(DOMESTIC);
+  const [current, setCurrent] = useState<string | null>(null);
+  const [requested, setRequested] = useState<string[]>([]);
   const [ratings, setRatings] = useState<PlatformRating[]>([]);
-  const [summary, setSummary] = useState<{
-    id: string | null;
-    query: string;
-    avg_rating: number | null;
-    total_reviews: number;
-    platform_count: number;
-  } | null>(null);
-  const [source, setSource] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [statuses, setStatuses] = useState<Record<string, PlatformStatus>>({});
+  const [summary, setSummary] = useState<SearchResult["search"] | null>(null);
+  const [source, setSource] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [description, setDescription] = useState<string | null>(null);
+  const [description, setDescription] = useState("");
+  const [withDescription, setWithDescription] = useState(false);
+  const [sort, setSort] = useState("rating");
+  const controller = useRef<AbortController | null>(null);
+  const initialSearch = useRef<((title: string, refresh?: boolean, platforms?: string[]) => Promise<void>) | null>(null);
 
-  // Cache choice state
-  const [cachePrompt, setCachePrompt] = useState<{
-    query: string;
-    search: Record<string, unknown>;
-  } | null>(null);
-
-  // Platform filter state
-  const [enabledPlatforms, setEnabledPlatforms] = useState<Set<string>>(
-    new Set(ALL_PLATFORMS)
-  );
-
-  // Sort state
-  const [sortOption, setSortOption] = useState<SortOption>("rating_desc");
-
-  const sortedRatings = useMemo(() => {
-    const sorted = [...ratings];
-    switch (sortOption) {
-      case "rating_desc":
-        return sorted.sort((a, b) => {
-          if (a.normalized_rating === null) return 1;
-          if (b.normalized_rating === null) return -1;
-          return b.normalized_rating - a.normalized_rating;
-        });
-      case "rating_asc":
-        return sorted.sort((a, b) => {
-          if (a.normalized_rating === null) return 1;
-          if (b.normalized_rating === null) return -1;
-          return a.normalized_rating - b.normalized_rating;
-        });
-      case "reviews_desc":
-        return sorted.sort((a, b) => b.review_count - a.review_count);
-      case "reviews_asc":
-        return sorted.sort((a, b) => a.review_count - b.review_count);
-      default:
-        return sorted;
+  const execute = useCallback(async (title: string, refresh = false, platforms = selected) => {
+    const clean = title.trim();
+    if (!clean || !platforms.length) return;
+    controller.current?.abort();
+    const active = new AbortController();
+    controller.current = active;
+    setQuery(clean); setCurrent(clean); setRequested([...platforms]); setRatings([]); setStatuses({});
+    setSummary(null); setSource(""); setError(null); setDescription(""); setLoading(true); setCancelled(false);
+    window.history.replaceState(null, "", `/?${new URLSearchParams({ q: clean, p: platforms.join(",") })}`);
+    try {
+      await searchBookStream(clean,
+        (rating) => { if (controller.current === active) setRatings((previous) => [...previous.filter((r) => r.platform !== rating.platform), rating]); },
+        (value, origin) => { if (controller.current === active) { setSummary(value); setSource(origin); } },
+        (message) => { if (controller.current === active) setError(message); },
+        withDescription ? (chunk) => { if (controller.current === active) setDescription((previous) => previous + chunk); } : undefined,
+        platforms, refresh, active.signal,
+        (status) => { if (controller.current === active) setStatuses((previous) => ({ ...previous, [status.platform]: status })); });
+    } catch (failure) {
+      if (controller.current === active && !active.signal.aborted) setError(failure instanceof Error ? failure.message : "검색 중 오류가 발생했습니다.");
+    } finally {
+      if (controller.current === active) setLoading(false);
     }
-  }, [ratings, sortOption]);
+  }, [selected, withDescription]);
 
-  const executeSearch = useCallback(
-    async (query: string, forceRefresh: boolean = false) => {
-      setIsLoading(true);
-      setError(null);
-      setRatings([]);
-      setSummary(null);
-      setSource(null);
-      setDescription(null);
-      setCachePrompt(null);
-
-      const activePlatforms = Array.from(enabledPlatforms);
-      const platforms =
-        activePlatforms.length === ALL_PLATFORMS.length
-          ? undefined
-          : activePlatforms;
-
-      try {
-        await searchBookStream(
-          query,
-          (rating) => {
-            setRatings((prev) => [...prev, rating]);
-          },
-          (searchSummary, src) => {
-            setSummary(searchSummary);
-            setSource(src);
-            setIsLoading(false);
-          },
-          (err) => {
-            setError(err);
-            setIsLoading(false);
-          },
-          (chunk) => {
-            setDescription((prev) => (prev || "") + chunk);
-          },
-          platforms,
-          forceRefresh
-        );
-
-        const params = new URLSearchParams({ q: query });
-        router.push(`/?${params.toString()}`, { scroll: false });
-      } catch (e) {
-        setError(
-          e instanceof Error ? e.message : "검색 중 오류가 발생했습니다"
-        );
-        setIsLoading(false);
-      }
-    },
-    [router, enabledPlatforms]
-  );
-
-  const handleSearch = useCallback(
-    async (query: string) => {
-      // First check cache
-      try {
-        const cacheResult = await checkCache(query);
-        if (cacheResult.cached && cacheResult.search) {
-          setCachePrompt({ query, search: cacheResult.search as Record<string, unknown> });
-          return;
-        }
-      } catch {
-        // Cache check failed, proceed with normal search
-      }
-
-      executeSearch(query);
-    },
-    [executeSearch]
-  );
-
-  const handleUseCached = useCallback(() => {
-    if (!cachePrompt) return;
-    executeSearch(cachePrompt.query, false);
-  }, [cachePrompt, executeSearch]);
-
-  const handleForceRefresh = useCallback(() => {
-    if (!cachePrompt) return;
-    executeSearch(cachePrompt.query, true);
-  }, [cachePrompt, executeSearch]);
-
-  const handleDismissCache = useCallback(() => {
-    setCachePrompt(null);
+  initialSearch.current = execute;
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const title = params.get("q");
+    const stored = [...new Set((params.get("p") || "").split(",").filter((p) => ALL.includes(p)))];
+    const platforms = stored.length ? stored : DOMESTIC;
+    if (title) {
+      setSelected(platforms);
+      void initialSearch.current?.(title, false, platforms);
+    }
+    return () => controller.current?.abort();
   }, []);
 
-  // Platform toggle handlers
-  const toggleAllPlatforms = useCallback(() => {
-    setEnabledPlatforms((prev) => {
-      if (prev.size === ALL_PLATFORMS.length) {
-        return new Set<string>();
-      }
-      return new Set(ALL_PLATFORMS);
-    });
-  }, []);
+  const sorted = useMemo(() => [...ratings].sort((a, b) => {
+    if (sort === "reviews") return (b.review_count ?? -1) - (a.review_count ?? -1);
+    if (a.normalized_rating == null && b.normalized_rating == null) return 0;
+    if (a.normalized_rating == null) return 1;
+    if (b.normalized_rating == null) return -1;
+    return b.normalized_rating - a.normalized_rating;
+  }), [ratings, sort]);
+  const completed = summary ? requested.length : Object.keys(statuses).length;
+  const matched = ratings.filter((r) => r.normalized_rating !== null);
+  const average = summary?.avg_rating ?? (matched.length ? matched.reduce((sum, r) => sum + r.normalized_rating!, 0) / matched.length : null);
 
-  const togglePlatform = useCallback((platform: string) => {
-    setEnabledPlatforms((prev) => {
-      const next = new Set(prev);
-      if (next.has(platform)) {
-        next.delete(platform);
-      } else {
-        next.add(platform);
-      }
-      return next;
-    });
-  }, []);
-
-  const allEnabled = enabledPlatforms.size === ALL_PLATFORMS.length;
-  const noneEnabled = enabledPlatforms.size === 0;
+  function toggle(platform: string) {
+    setSelected((previous) => previous.includes(platform) ? previous.filter((p) => p !== platform) : [...previous, platform]);
+  }
 
   return (
-    <div className="space-y-8">
-      {/* 히어로 섹션 */}
-      <div className="text-center space-y-4 py-8">
-        <h1 className="text-3xl font-bold">책 평점 비교</h1>
-        <p className="text-gray-500">
-          {ALL_PLATFORMS.length}개 플랫폼의 평점을 한번에 비교하세요
-        </p>
-      </div>
+    <div className="home-page">
+      <section className="hero">
+        <div className="eyebrow"><span /> 다음 한 권을 위한 탐색</div>
+        <h1>한 권의 책,<br /><em>여러 독자의 시선.</em></h1>
+        <p>서점과 독서 커뮤니티의 평점을 한곳에서.<br className="mobile-break" /> 읽기 전, 다른 독자들의 평가를 살펴보세요.</p>
+      </section>
 
-      {/* 검색 폼 */}
-      <div className="max-w-2xl mx-auto">
-        <SearchForm onSearch={handleSearch} isLoading={isLoading} />
-      </div>
-
-      {/* 플랫폼 필터 토글 */}
-      <div className="max-w-2xl mx-auto">
-        <div className="flex flex-wrap gap-2 justify-center">
-          <button
-            onClick={toggleAllPlatforms}
-            className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
-              allEnabled
-                ? "bg-gray-800 text-white border-gray-800"
-                : "bg-white text-gray-400 border-gray-300 hover:border-gray-400"
-            }`}
-          >
-            전체
-          </button>
-          {ALL_PLATFORMS.map((platform) => {
-            const meta = PLATFORM_META[platform];
-            const enabled = enabledPlatforms.has(platform);
-            return (
-              <button
-                key={platform}
-                onClick={() => togglePlatform(platform)}
-                className="px-3 py-1.5 rounded-full text-sm font-medium border transition-colors"
-                style={
-                  enabled
-                    ? {
-                        backgroundColor: meta.color,
-                        color: "#fff",
-                        borderColor: meta.color,
-                      }
-                    : {
-                        backgroundColor: "#fff",
-                        color: "#9ca3af",
-                        borderColor: "#d1d5db",
-                      }
-                }
-              >
-                {meta.label}
-              </button>
-            );
-          })}
-        </div>
-        {noneEnabled && (
-          <p className="text-center text-xs text-red-500 mt-2">
-            최소 1개 플랫폼을 선택해주세요
-          </p>
-        )}
-      </div>
-
-      {/* 캐시 확인 배너 */}
-      {cachePrompt && (
-        <div className="max-w-2xl mx-auto bg-amber-50 border border-amber-200 rounded-xl p-5">
-          <p className="text-amber-800 font-medium mb-3">
-            &ldquo;{cachePrompt.query}&rdquo;에 대한 이전 검색 결과가
-            있습니다. 캐시된 결과를 볼까요?
-          </p>
-          <div className="flex gap-3">
-            <button
-              onClick={handleUseCached}
-              className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition-colors"
-            >
-              캐시 결과 보기
-            </button>
-            <button
-              onClick={handleForceRefresh}
-              className="px-4 py-2 bg-white text-amber-700 border border-amber-300 rounded-lg text-sm font-medium hover:bg-amber-100 transition-colors"
-            >
-              새로 검색
-            </button>
-            <button
-              onClick={handleDismissCache}
-              className="px-4 py-2 text-gray-500 text-sm hover:text-gray-700 transition-colors"
-            >
-              취소
-            </button>
+      <section className="search-panel" aria-label="책 검색">
+        <SearchForm query={query} onQueryChange={setQuery} onSearch={(title) => void execute(title)} isLoading={loading} disabled={!selected.length} />
+        <div className="search-examples"><span>이런 책은 어때요?</span>{EXAMPLES.map((title) => <button key={title} onClick={() => void execute(title)} disabled={!selected.length}>{title}<span aria-hidden="true">↗</span></button>)}</div>
+        <div className="platform-controls">
+          <div className="platform-heading"><span>비교할 플랫폼 <strong>{selected.length}</strong></span><div className="preset-buttons">
+            <button aria-pressed={selected.length === DOMESTIC.length && DOMESTIC.every((p) => selected.includes(p))} onClick={() => setSelected(DOMESTIC)}>국내</button>
+            <button aria-pressed={selected.length === FOREIGN.length && FOREIGN.every((p) => selected.includes(p))} onClick={() => setSelected(FOREIGN)}>해외</button>
+            <button aria-pressed={selected.length === ALL.length} onClick={() => setSelected(ALL)}>전체</button>
+          </div></div>
+          <div className="platform-chips">{ALL.map((platform) => <button key={platform} aria-pressed={selected.includes(platform)} onClick={() => toggle(platform)} className={selected.includes(platform) ? "selected" : ""}>
+            <span className="platform-dot" style={{ background: PLATFORM_META[platform].color }} />{PLATFORM_META[platform].label}<span className="chip-check" aria-hidden="true">{selected.includes(platform) ? "✓" : "+"}</span>
+          </button>)}</div>
+          <div className="search-options"><span>{selected.length ? "제목 또는 ISBN으로 검색할 수 있어요." : "플랫폼을 하나 이상 선택해주세요."}</span>
+            <label><input type="checkbox" checked={withDescription} onChange={(e) => setWithDescription(e.target.checked)} /> AI 책 소개 함께 보기</label>
           </div>
         </div>
-      )}
+      </section>
 
-      {/* 에러 */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 text-center">
-          {error}
-        </div>
-      )}
-
-      {/* 책 소개 (AI 생성) */}
-      {description && (
-        <div className="bg-gradient-to-br from-slate-50 to-blue-50 border border-slate-200 rounded-2xl p-8 shadow-sm">
-          <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">
-            책 소개
-          </h3>
-          <div className="prose prose-slate max-w-none text-[15px] leading-[1.8] [&_h1]:text-xl [&_h1]:font-bold [&_h1]:mt-6 [&_h1]:mb-3 [&_h2]:text-lg [&_h2]:font-semibold [&_h2]:mt-5 [&_h2]:mb-2 [&_h3]:text-base [&_h3]:font-semibold [&_h3]:mt-4 [&_h3]:mb-2 [&_p]:mb-3 [&_p]:text-slate-700 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:mb-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:mb-3 [&_li]:mb-1.5 [&_li]:text-slate-700 [&_strong]:font-semibold [&_strong]:text-slate-900 [&_em]:italic [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:border-l-4 [&_blockquote]:border-slate-300 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-slate-500 [&_blockquote]:my-4 [&_hr]:my-6 [&_hr]:border-slate-200">
-            <ReactMarkdown>{description}</ReactMarkdown>
+      {current ? <section className="results-section" aria-label="검색 결과" aria-busy={loading}>
+        <div className="results-heading"><div><div className="eyebrow">{loading ? "독자들의 평가를 찾고 있어요" : cancelled ? "검색을 중단했어요" : "검색 결과"}</div><h2>{current}</h2></div>
+          <div className="result-actions">{summary?.id && <BookmarkButton searchId={summary.id} query={current} avgRating={summary.avg_rating} totalReviews={summary.total_reviews} platformCount={summary.platform_count} />}
+            {loading ? <button className="text-button" onClick={() => { controller.current?.abort(); setCancelled(true); setLoading(false); }}>검색 중단</button> : <button className="text-button" onClick={() => void execute(current, true, requested)}>↻ 새로 조회</button>}
           </div>
         </div>
-      )}
 
-      {/* 소개 로딩 중 (검색 시작했지만 description 아직 없을 때) */}
-      {isLoading && !description && (
-        <div className="bg-gradient-to-br from-slate-50 to-blue-50 border border-slate-200 rounded-2xl p-8 shadow-sm animate-pulse">
-          <div className="h-3 bg-slate-200 rounded w-16 mb-5"></div>
-          <div className="space-y-3">
-            <div className="h-3.5 bg-slate-100 rounded w-full"></div>
-            <div className="h-3.5 bg-slate-100 rounded w-11/12"></div>
-            <div className="h-3.5 bg-slate-100 rounded w-5/6"></div>
-            <div className="h-3.5 bg-slate-100 rounded w-full"></div>
-            <div className="h-3.5 bg-slate-100 rounded w-4/6"></div>
-          </div>
+        <div className="search-progress" role="status" aria-live="polite"><span className={loading ? "pulse-dot" : "complete-dot"} />
+          {loading ? `${requested.length}개 중 ${completed}개 플랫폼 확인 · 결과가 도착하면 바로 보여드려요` : `${ratings.length}개 플랫폼에서 결과를 찾았습니다`}
+          {source === "cache" && <span className="cache-label">이전 검색 결과</span>}
         </div>
-      )}
+        <div className="progress-track"><div style={{ width: `${requested.length ? completed / requested.length * 100 : 0}%` }} /></div>
+        {error && <div className="notice error" role="alert">{error} <button onClick={() => void execute(current, true, requested)}>다시 시도</button></div>}
 
-      {/* 로딩 중 + 이미 도착한 결과 */}
-      {isLoading && ratings.length === 0 && <LoadingSkeleton />}
+        {ratings.length > 0 && <>
+          <div className="comparison-summary"><div><span>10점 환산 평균</span><strong>{average?.toFixed(1) ?? "—"}<small>/ 10</small></strong></div><p>플랫폼마다 판본과 평가 방식이 달라요.<br />점수와 함께 평가 수, 책 제목을 확인하세요.</p></div>
+          <div className="result-toolbar"><span>플랫폼별 평가 <strong>{ratings.length}</strong></span><label><span className="sr-only">결과 정렬</span><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="rating">평점 높은 순</option><option value="reviews">평가 많은 순</option></select></label></div>
+          <RatingGrid ratings={sorted} />
+        </>}
+        {loading && !ratings.length && <div className="waiting-state"><span className="search-spinner" /><p>선택한 사이트에서 책을 찾고 있습니다.</p><span>사이트 응답에 따라 잠시 걸릴 수 있어요.</span></div>}
+        {!loading && !ratings.length && !error && <div className="empty-results"><span aria-hidden="true">⌕</span><h3>{cancelled ? "검색을 중단했습니다" : "일치하는 결과를 찾지 못했어요"}</h3><p>정확한 책 제목이나 ISBN으로 다시 검색해보세요.<br />사이트의 수집 제한으로 결과가 없을 수도 있습니다.</p></div>}
 
-      {/* 요약 (완료 시) */}
-      {summary && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">
-              &ldquo;{summary.query}&rdquo; 검색 결과
-              {source === "cache" && (
-                <span className="ml-2 text-xs font-normal text-gray-400 bg-gray-100 px-2 py-1 rounded-full">
-                  캐시됨
-                </span>
-              )}
-            </h2>
-            {summary.id && (
-              <BookmarkButton
-                searchId={summary.id}
-                query={summary.query}
-                avgRating={summary.avg_rating}
-                totalReviews={summary.total_reviews}
-                platformCount={summary.platform_count}
-              />
-            )}
-          </div>
-          <div className="flex gap-8 text-sm">
-            {summary.avg_rating !== null && (
-              <div>
-                <span className="text-gray-500">평균 평점</span>
-                <p className="text-2xl font-bold">
-                  {summary.avg_rating.toFixed(2)}
-                  <span className="text-sm font-normal text-gray-400">
-                    /10
-                  </span>
-                </p>
-              </div>
-            )}
-            <div>
-              <span className="text-gray-500">총 리뷰 수</span>
-              <p className="text-2xl font-bold">
-                {summary.total_reviews.toLocaleString()}
-                <span className="text-sm font-normal text-gray-400">개</span>
-              </p>
-            </div>
-            <div>
-              <span className="text-gray-500">플랫폼</span>
-              <p className="text-2xl font-bold">
-                {summary.platform_count}
-                <span className="text-sm font-normal text-gray-400">개</span>
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 결과 카드 (스트리밍 중에도 표시) */}
-      {ratings.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            {isLoading && (
-              <p className="text-sm text-gray-500">
-                {ratings.length}개 플랫폼 결과 수신 중...
-              </p>
-            )}
-            {!isLoading && <div />}
-            <div className="flex items-center gap-2">
-              <label
-                htmlFor="sort-select"
-                className="text-sm text-gray-500"
-              >
-                정렬:
-              </label>
-              <select
-                id="sort-select"
-                value={sortOption}
-                onChange={(e) => setSortOption(e.target.value as SortOption)}
-                className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {SORT_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <RatingGrid ratings={sortedRatings} />
-        </div>
-      )}
+        <div className="platform-statuses">{requested.map((platform) => {
+          const found = ratings.some((r) => r.platform === platform);
+          const status = statuses[platform];
+          const pending = loading && !status && !summary;
+          const label = status?.status === "blocked" ? "수집 제한" : status?.status === "timeout" ? "시간 초과" : status?.status === "parse_error" ? "일부 정보 미확인" : found ? "✓ 확인" : pending ? "확인 중…" : status?.status === "not_found" || status?.status === "identity_mismatch" ? "일치 결과 없음" : cancelled && !status ? "중단" : "연결 불가";
+          return <div key={platform} className={found ? "found" : ""} title={status?.reason}><span>{PLATFORM_META[platform].label}</span><span>{label}</span></div>;
+        })}</div>
+        {summary?.storage_saved === false && ratings.length > 0 && <p className="notice">검색 결과는 표시했지만 기록을 저장하지 못했습니다. 잠시 후 새로 조회해주세요.</p>}
+        {summary?.created_at && <p className="result-timestamp">{new Date(summary.created_at).toLocaleString("ko-KR")} 기준 · 이전 결과는 최대 24시간 재사용합니다.</p>}
+        {description && <details className="description-panel" open><summary>AI 책 소개</summary><p className="description-disclaimer">AI가 생성한 내용으로 사실과 다를 수 있습니다.</p><div className="prose"><ReactMarkdown>{description}</ReactMarkdown></div></details>}
+      </section> : <section className="how-it-works"><div><span className="step-number">01</span><h2>책 한 권을 검색하고</h2><p>제목이나 ISBN을 입력하세요.</p></div><div><span className="step-number">02</span><h2>여러 평가를 나란히</h2><p>같은 10점 기준으로 비교하세요.</p></div><div><span className="step-number">03</span><h2>나의 다음 책으로</h2><p>마음에 들면 <Link href="/bookmarks">읽을 책</Link>에 담아두세요.</p></div></section>}
+      <p className="data-note">별점 참여 수와 글 리뷰 수를 구분하며, 확인하지 못한 수치는 표시하지 않습니다. 판본·집계 기준·수집 시점에 차이가 있습니다. ISBN을 지정해도 플랫폼 평점은 여러 판본과 합산될 수 있으며, 일부 사이트는 수집이 제한될 수 있습니다.</p>
     </div>
   );
 }

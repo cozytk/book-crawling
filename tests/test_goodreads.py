@@ -84,7 +84,7 @@ class TestGoodreadsSearchByIdentifier:
         with patch.object(crawler, "_fetch_with_redirect") as mock_fetch:
             mock_fetch.return_value = (html, "https://goodreads.com/book/show/123")
 
-            url, title = crawler.search_by_identifier("9781594205071")
+            url, title = crawler.search_by_identifier("9780132350884")
 
         assert url == "https://goodreads.com/book/show/123"
         assert "Clean Code" in title
@@ -191,7 +191,7 @@ class TestGoodreadsCrawl:
             with patch.object(crawler, "_fetch_with_redirect") as mock_fetch:
                 mock_fetch.return_value = (html, "https://goodreads.com/book/show/123")
                 with patch.object(crawler, "delay"):
-                    result = await crawler.crawl("9781594205071")
+                    result = await crawler.crawl("9780132350884")
 
         assert result is not None
         assert result.platform == "goodreads"

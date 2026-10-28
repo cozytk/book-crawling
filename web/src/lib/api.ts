@@ -1,14 +1,42 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { SSEParser } from "./sse";
+
+const API_URL = "";
 
 export interface PlatformRating {
   platform: string;
   rating: number | null;
   rating_scale: number;
   normalized_rating: number | null;
-  review_count: number;
+  review_count: number | null;
+  rating_count?: number | null;
+  text_review_count?: number | null;
+  short_review_count?: number | null;
+  isbn?: string | null;
+  author?: string | null;
+  edition_note?: string | null;
+  comparison_scope?: "work" | "edition" | "volume_group";
+  volume_results?: VolumeRating[];
+  aggregation_method?: string | null;
+  aggregate_complete?: boolean | null;
+  publisher?: string | null;
+  translator?: string | null;
   book_title: string;
   url: string;
   crawled_at: string;
+}
+
+export interface VolumeRating {
+  volume: string;
+  book_title: string;
+  isbn?: string | null;
+  url?: string;
+  rating: number | null;
+  rating_scale?: number;
+  rating_count?: number | null;
+  text_review_count?: number | null;
+  short_review_count?: number | null;
+  review_count?: number | null;
+  status: string;
 }
 
 export interface SearchResult {
@@ -17,9 +45,14 @@ export interface SearchResult {
     id: string | null;
     query: string;
     avg_rating: number | null;
-    total_reviews: number;
+    total_reviews: number | null;
+    counts_complete?: boolean;
+    legacy_validation?: boolean;
     platform_count: number;
+    missing_platforms?: string[];
     created_at?: string;
+    storage_saved?: boolean;
+    requested_platforms?: string[];
   };
   ratings: PlatformRating[];
 }
@@ -27,6 +60,12 @@ export interface SearchResult {
 export interface PlatformInfo {
   name: string;
   type: "domestic" | "foreign";
+}
+
+export interface PlatformStatus {
+  platform: string;
+  status: "done" | "unavailable" | "timeout" | "blocked" | "not_found" | "identity_mismatch" | "parse_error" | "network_error";
+  reason?: string;
 }
 
 export async function searchBook(
@@ -75,9 +114,11 @@ export interface CacheCheckResult {
   search?: SearchResult["search"];
 }
 
-export async function checkCache(query: string): Promise<CacheCheckResult> {
+export async function checkCache(query: string, platforms?: string[]): Promise<CacheCheckResult> {
+  const params = new URLSearchParams({ query });
+  platforms?.forEach((platform) => params.append("platforms", platform));
   const res = await fetch(
-    `${API_URL}/api/search/check?query=${encodeURIComponent(query)}`
+    `${API_URL}/api/search/check?${params}`
   );
   if (!res.ok) {
     return { cached: false };
@@ -93,15 +134,19 @@ export async function searchBookStream(
   onError: (error: string) => void,
   onDescription?: (description: string) => void,
   platforms?: string[],
-  forceRefresh?: boolean
+  forceRefresh?: boolean,
+  signal?: AbortSignal,
+  onStatus?: (status: PlatformStatus) => void
 ): Promise<void> {
   const res = await fetch(`${API_URL}/api/search/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal,
     body: JSON.stringify({
       query,
       platforms: platforms || null,
       force_refresh: forceRefresh || false,
+      include_description: Boolean(onDescription),
     }),
   });
 
@@ -114,37 +159,35 @@ export async function searchBookStream(
   if (!reader) throw new Error("ReadableStream not supported");
 
   const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    let eventType = "message";
-    for (const line of lines) {
-      if (line.startsWith("event: ")) {
-        eventType = line.slice(7).trim();
-      } else if (line.startsWith("data: ")) {
-        const data = line.slice(6);
-        try {
-          const parsed = JSON.parse(data);
-          if (eventType === "done") {
-            onDone(parsed.search, parsed.source);
-          } else if (eventType === "description_chunk") {
-            onDescription?.(parsed.chunk);
-          } else {
-            onResult(parsed as PlatformRating);
-          }
-        } catch {
-          // skip invalid JSON
-        }
-        eventType = "message";
-      }
+  let completed = false;
+  let failed = false;
+  const parser = new SSEParser((event, data) => {
+    const parsed = JSON.parse(data);
+    if (event === "done") {
+      completed = true;
+      if (!failed) onDone(parsed.search, parsed.source);
+    } else if (event === "error") {
+      failed = true;
+      onError(parsed.message || "검색 중 오류가 발생했습니다");
+    } else if (event === "description_chunk") {
+      onDescription?.(parsed.chunk);
+    } else if (event === "platform_status") {
+      onStatus?.(parsed as PlatformStatus);
+    } else if (event === "rating" || event === "message") {
+      onResult(parsed as PlatformRating);
     }
+  });
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parser.push(decoder.decode(value, { stream: true }));
+    }
+    parser.push(decoder.decode());
+    if (!completed) throw new Error("검색 연결이 끊어졌습니다. 다시 검색해주세요.");
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 }
 
@@ -153,7 +196,7 @@ export interface SearchHistoryItem {
   id: string;
   query: string;
   avg_rating: number | null;
-  total_reviews: number;
+  total_reviews: number | null;
   platform_count: number;
   created_at: string;
   ratings: PlatformRating[];

@@ -2,6 +2,7 @@
 
 import os
 import sys
+import secrets
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -9,14 +10,15 @@ load_dotenv()
 # 프로젝트 루트를 Python 경로에 추가
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from crawler_logging import CrawlerLogger
 
 # 로깅 설정 (콘솔 출력, OpenObserve 비활성화)
 CrawlerLogger.configure(
-    level=os.environ.get("LOG_LEVEL", "DEBUG"),
+    level=os.environ.get("LOG_LEVEL", "WARNING"),
     console=True,
     openobserve=False,
 )
@@ -26,6 +28,15 @@ app = FastAPI(
     description="여러 플랫폼의 책 평점을 수집하는 API",
     version="0.1.0",
 )
+
+
+@app.middleware("http")
+async def authenticate_service(request: Request, call_next):
+    secret = os.environ.get("API_SERVICE_TOKEN")
+    if request.url.path not in {"/health", "/api/health"} and secret:
+        if not secrets.compare_digest(request.headers.get("x-api-token", ""), secret):
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
 
 # CORS 설정
 app.add_middleware(
@@ -52,5 +63,6 @@ async def root():
 
 
 @app.get("/health")
+@app.get("/api/health")
 async def health():
-    return {"status": "healthy"}
+    return {"status": "healthy", "storage": "blob" if os.environ.get("BLOB_READ_WRITE_TOKEN") or os.environ.get("BLOB_STORE_ID") else "local"}

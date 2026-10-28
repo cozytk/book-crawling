@@ -1,3 +1,4 @@
+from crawlers.transport import fetch_sync, active_transport
 """Goodreads HTTP 기반 크롤러"""
 
 import json
@@ -8,7 +9,7 @@ import urllib.request
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import is_isbn
+from .utils import is_isbn, title_score, book_node, valid_rating, count_number, candidate_score
 
 
 class GoodreadsCrawler(BaseHttpCrawler):
@@ -29,7 +30,7 @@ class GoodreadsCrawler(BaseHttpCrawler):
         self._cached_rating: float | None = None
         self._cached_review_count: int = 0
 
-    def _fetch_with_redirect(self, url: str, retries: int = 2) -> tuple[str, str]:
+    def _fetch_with_redirect(self, url: str, retries: int = 0) -> tuple[str, str]:
         """
         URL에서 HTML 가져오기 (리다이렉트 추적, 재시도 지원)
 
@@ -40,6 +41,11 @@ class GoodreadsCrawler(BaseHttpCrawler):
         Returns:
             (html, final_url) - 최종 URL과 HTML 내용
         """
+        response = fetch_sync(url, {"User-Agent": self.user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9"})
+        if response is not None:
+            return response.text, response.url
         import time
 
         last_error = None
@@ -54,7 +60,7 @@ class GoodreadsCrawler(BaseHttpCrawler):
                 for k, v in headers.items():
                     req.add_header(k, v)
 
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                with urllib.request.urlopen(req, timeout=8) as resp:
                     final_url = resp.geturl()
                     content = resp.read()
                     try:
@@ -98,10 +104,22 @@ class GoodreadsCrawler(BaseHttpCrawler):
 
         # 상세 페이지에서 제목과 평점 추출
         title, rating, review_count = self._parse_detail_page(html)
-        if title:
+        if not self._strict_isbn and self._expected_title and self.rating_count == 0:
+            # A title comparison may search another verified edition of this
+            # work. An explicit user ISBN still retains its unrated edition.
+            return None, ""
+        if title and self.verify_detail(BeautifulSoup(html, "html.parser"), title, identifier):
+            self._rating_loaded = True
             self._cached_rating = rating
             self._cached_review_count = review_count
             return final_url, title
+
+        transport = active_transport()
+        if transport:
+            transport.diagnostics[self.name] = {"isbn_detail_title": title,
+                "isbn_failure": self.failure_status,
+                "expected_title": self._expected_title,
+                "expected_author": self._expected_author[:2] if isinstance(self._expected_author,list) else self._expected_author}
 
         return None, ""
 
@@ -118,8 +136,26 @@ class GoodreadsCrawler(BaseHttpCrawler):
         Returns:
             (book_url, book_title) 또는 (None, "") if not found
         """
+        transport=active_transport()
+        if transport:
+            transport.diagnostics.setdefault(self.name,{}).update({'query':keyword,'expected_author':self._expected_author})
+        # Native header search exposes a public Book autocomplete response.
+        # It carries exact work rating counts, title, author and Book IDs in
+        # one response, so a work query need not request a blocked detail page.
+        # It does not prove an explicit ISBN or expose written review counts.
+        if self._expected_author and not is_isbn(self._original_query or keyword):
+            try:
+                autocomplete = f'{self.base_url}/book/auto_complete?format=json&q={urllib.parse.quote(keyword)}'
+                payload, _ = self._fetch_with_redirect(autocomplete)
+                found = self._autocomplete_aggregate(payload, keyword)
+                if found:
+                    return found
+            except Exception as error:
+                if transport:
+                    transport.diagnostics.setdefault(self.name,{})['autocomplete_error']=type(error).__name__
+
         encoded_title = urllib.parse.quote(keyword)
-        search_url = f"https://www.goodreads.com/search?q={encoded_title}"
+        search_url = f"https://www.goodreads.com/search?q={encoded_title}&tab=books&filter=title"
 
         try:
             html, final_url = self._fetch_with_redirect(search_url)
@@ -129,7 +165,8 @@ class GoodreadsCrawler(BaseHttpCrawler):
         # 검색 결과가 상세 페이지로 리다이렉트된 경우 (정확한 매칭)
         if "/book/show/" in final_url:
             book_title, rating, review_count = self._parse_detail_page(html)
-            if book_title:
+            if book_title and title_score(keyword, book_title) and self.verify_detail(BeautifulSoup(html, "html.parser"), book_title, keyword):
+                self._rating_loaded = True
                 self._cached_rating = rating
                 self._cached_review_count = review_count
                 return final_url, book_title
@@ -139,25 +176,125 @@ class GoodreadsCrawler(BaseHttpCrawler):
         soup = BeautifulSoup(html, "html.parser")
 
         # 검색 결과 테이블에서 책 링크 찾기
-        book_link = soup.select_one("a.bookTitle")
+        links = soup.select("a.bookTitle, [data-testid='book-item-title'] a") or soup.select('a[href*="/book/show/"]')
+        def score(link):
+            container = link.find_parent("tr") or link.find_parent(class_="Book") or link.parent
+            authors = ", ".join(a.get_text(" ", strip=True) for a in container.select('a[href*="/author/show/"]'))
+            if not re.search(r'\b(?:band|vol(?:ume)?\.?|part)\s+(?:[IVX]+|\d+)\b',keyword,re.I) and re.search(r'\s[-–—:]\s*(?:band|vol(?:ume)?\.?|part)\s+(?:[IVX]+|\d+)\b',link.get_text(' ',strip=True),re.I):
+                return 0
+            # Some server-rendered variants omit the byline. The detail Book
+            # node must still prove the known author before a rating is used.
+            return candidate_score(keyword, link.get_text(" ", strip=True), authors,
+                                   self._expected_author if authors else None)
+        def support(link):
+            container = link.find_parent("tr") or link.find_parent(class_="Book") or link.parent
+            counter=container.select_one('[data-testid="book-item-ratings-count"], .minirating')
+            # Some responses put the population in the row's accessibility
+            # label instead of the expected counter. Stay inside this Book
+            # row; ranking hints never become exact output counts.
+            text=' '.join([counter.get_text(' ',strip=True) if counter else '',
+                           container.get_text(' ',strip=True),
+                           *[node.get('aria-label','') for node in container.select('[aria-label]')]])
+            # Rounded search counts are ranking hints only. Exact output
+            # counts always come from the selected Book's detail aggregate.
+            matches=re.findall(r'([\d,.]+)\s*(k|m|thousand|million)?\s*ratings?\b',text,re.I)
+            if not matches:
+                return 0
+            return max(float(value.replace(',',''))*{'k':1000,'m':1000000,'thousand':1000,'million':1000000}.get(unit.lower(),1)
+                       for value,unit in matches)
+        book_link = max((link for link in links if score(link)), key=lambda link:(support(link),score(link)), default=None)
+        transport = active_transport()
+        if transport:
+            transport.diagnostics.setdefault(self.name, {}).update({"query": keyword,
+                "page_title": soup.title.get_text() if soup.title else None,
+                "candidates": [{"title":a.get_text(" ",strip=True),"score":score(a),"ranking_ratings":support(a)} for a in links[:6]],
+                "total_candidates":len(links)})
+        if book_link and not score(book_link):
+            book_link = None
         if book_link:
             book_url = book_link.get("href", "")
             if book_url and not book_url.startswith("http"):
                 book_url = f"https://www.goodreads.com{book_url}"
             book_title = book_link.get_text(strip=True)
+            self._selected_title = book_title
             return book_url, book_title
 
-        # 대체 셀렉터 시도
-        book_link = soup.select_one('a[href*="/book/show/"]')
-        if book_link:
-            book_url = book_link.get("href", "")
-            if book_url and not book_url.startswith("http"):
-                book_url = f"https://www.goodreads.com{book_url}"
-            book_title = book_link.get_text(strip=True)
-            if book_title:
-                return book_url, book_title
+        if self._expected_author and not is_isbn(self._original_query or keyword):
+            # Autocomplete has only five slots and can omit the real work.
+            # A full title observed in the native result list is a discovery
+            # query, never identity proof: its new Book response must still
+            # independently match the known author before accepting stars.
+            titles=[]
+            for link in links:
+                title=link.get_text(' ',strip=True)
+                if title!=keyword and title not in titles and candidate_score(keyword,title,self._expected_author,self._expected_author):
+                    titles.append(title)
+            for title in titles[:2]:
+                try:
+                    url=f'{self.base_url}/book/auto_complete?format=json&q={urllib.parse.quote(title)}'
+                    payload,_=self._fetch_with_redirect(url)
+                    found=self._autocomplete_aggregate(payload,keyword)
+                    if found:
+                        return found
+                except Exception:
+                    continue
+
+        if not links and not re.search(r"no\s+(?:books|results)\s+(?:were\s+)?found|did not match any books",soup.get_text(" ",strip=True),re.I):
+            self.failure_status="parse_error"
 
         return None, ""
+
+    def _autocomplete_aggregate(self, payload, keyword):
+        rows = json.loads(payload)
+        if not isinstance(rows, list):
+            return None
+        transport=active_transport()
+        if transport:
+            transport.diagnostics.setdefault(self.name,{})['autocomplete_candidates']=[{
+                'title':row.get('bookTitleBare') or row.get('title'),'author':row.get('author'),
+                'book_id':row.get('bookId'),'work_id':row.get('workId'),'url':row.get('bookUrl'),
+                'ratings_count':row.get('ratingsCount')} for row in rows[:8] if isinstance(row,dict)]
+        candidates=[]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            title=row.get('bookTitleBare') or row.get('title')
+            author=row.get('author',{})
+            author=author.get('name','') if isinstance(author,dict) else ''
+            identifier=str(row.get('bookId',''))
+            work_id=str(row.get('workId',''))
+            href=row.get('bookUrl','')
+            if not isinstance(title,str) or not isinstance(href,str) or not identifier.isdigit() or not work_id.isdigit():
+                continue
+            parsed=urllib.parse.urlsplit(urllib.parse.urljoin(self.base_url,href))
+            if (parsed.scheme!='https' or parsed.netloc!='www.goodreads.com'
+                    or not re.fullmatch(r'/book/show/'+re.escape(identifier)+r'(?:[.-][^/]*)?',parsed.path)):
+                continue
+            score=candidate_score(keyword,title,author,self._expected_author)
+            if (not score or (not re.search(r'\b(?:band|vol(?:ume)?\.?|part)\s+(?:[IVX]+|\d+)\b',keyword,re.I)
+                    and re.search(r'\s[-–—:]\s*(?:band|vol(?:ume)?\.?|part)\s+(?:[IVX]+|\d+)\b',title,re.I))):
+                continue
+            count=row.get('ratingsCount')
+            if isinstance(count,bool) or not re.fullmatch(r'\d+',str(count)):
+                continue
+            rating=valid_rating(row.get('avgRating'),5)
+            if rating is None:
+                continue
+            candidates.append((int(count),score,title,author,identifier,rating,work_id))
+        if not candidates:
+            return None
+        count,_,title,author,identifier,rating,work_id=max(candidates,key=lambda row:(row[0],row[1]))
+        self.rating_count=count
+        self.text_review_count=None
+        self.book_author=author
+        self._cached_rating=rating if count else None
+        self._cached_review_count=count
+        self._rating_loaded=self.count_observed=True
+        transport=active_transport()
+        if transport:
+            transport.diagnostics.setdefault(self.name,{}).update({'method':'verified_autocomplete_aggregate',
+                'work_id':work_id,'query':keyword,'eligible_candidates':len(candidates)})
+        return f'{self.base_url}/book/show/{identifier}',title
 
     def _parse_detail_page(self, html: str) -> tuple[str, float | None, int]:
         """
@@ -179,38 +316,24 @@ class GoodreadsCrawler(BaseHttpCrawler):
             if title_elem:
                 title = title_elem.get_text(strip=True)
 
-        # JSON-LD에서 평점/리뷰 추출
-        rating = None
-        review_count = 0
-
-        for script in soup.find_all("script", type="application/ld+json"):
-            try:
-                data = json.loads(script.string)
-                if isinstance(data, dict) and "aggregateRating" in data:
-                    ar = data["aggregateRating"]
-                    rating = float(ar.get("ratingValue", 0))
-                    # ratingCount: 별점 참여자 수 (reviewCount는 리뷰 작성자 수)
-                    review_count = int(ar.get("ratingCount", 0))
-                    return title, rating, review_count
-            except (json.JSONDecodeError, ValueError, TypeError):
-                continue
-
-        # JSON-LD 실패 시 HTML에서 직접 추출
-        rating_elem = soup.select_one('div[class*="RatingStatistics"] span[class*="RatingStars"]')
-        if rating_elem:
-            aria_label = rating_elem.get("aria-label", "")
-            match = re.search(r"([\d.]+)\s*out of\s*5", aria_label)
-            if match:
-                rating = float(match.group(1))
-
-        review_elem = soup.select_one('span[data-testid="reviewsCount"]')
-        if review_elem:
-            text = review_elem.get_text(strip=True)
-            match = re.search(r"([\d,]+)", text)
-            if match:
-                review_count = int(match.group(1).replace(",", ""))
-
-        return title, rating, review_count
+        node = book_node(soup, title) or {}
+        aggregate = node.get("aggregateRating", {})
+        rating = valid_rating(aggregate.get("ratingValue"), 5, aggregate.get("bestRating"))
+        self.rating_count = count_number(aggregate.get("ratingCount"))
+        self.text_review_count = count_number(aggregate.get("reviewCount"))
+        if rating is None:
+            element = soup.select_one('div[class*="RatingStatistics"] span[class*="RatingStars"]')
+            if element:
+                match = re.search(r"([\d.]+)\s*out of\s*5", element.get("aria-label", ""))
+                rating = valid_rating(match.group(1), 5) if match else None
+        for selector, field in [('span[data-testid="ratingsCount"]', 'rating_count'), ('span[data-testid="reviewsCount"]', 'text_review_count')]:
+            element = soup.select_one(selector)
+            match = re.search(r"([\d,]+)", element.get_text()) if element else None
+            if match and getattr(self, field) is None:
+                setattr(self, field, count_number(match.group(1)))
+        if self.rating_count == 0:
+            rating = None
+        return title, rating, self.rating_count if self.rating_count is not None else self.text_review_count or 0
 
     async def get_rating(self, url: str) -> tuple[float | None, int]:
         """
@@ -220,7 +343,7 @@ class GoodreadsCrawler(BaseHttpCrawler):
         아니면 상세 페이지 다시 접근.
         """
         # 캐시된 값이 있으면 반환
-        if self._cached_rating is not None:
+        if self._rating_loaded or self._cached_rating is not None:
             self.logger.debug("캐시된 평점 사용", rating=self._cached_rating)
             self.logger.rating_complete(
                 self._cached_rating, self._cached_review_count, method="json-ld",
@@ -235,6 +358,14 @@ class GoodreadsCrawler(BaseHttpCrawler):
             self.logger.rating_complete(None, 0, method="json-ld", rating_scale=self.rating_scale)
             return None, 0
 
-        _, rating, review_count = self._parse_detail_page(html)
+        title, rating, review_count = self._parse_detail_page(html)
+        expected = self._expected_title or getattr(self, "_selected_title", None)
+        if not self.verify_detail(BeautifulSoup(html, "html.parser"), title, expected):
+            transport = active_transport()
+            if transport:
+                node = book_node(BeautifulSoup(html, "html.parser"), title) or {}
+                transport.diagnostics.setdefault(self.name,{}).update({"detail_title":title,"detail_author":node.get("author"),"detail_failure":self.failure_status})
+            return None, 0
+        self._rating_loaded = True
         self.logger.rating_complete(rating, review_count, method="json-ld", rating_scale=self.rating_scale)
         return rating, review_count

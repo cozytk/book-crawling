@@ -1,3 +1,4 @@
+from crawlers.transport import fetch_sync
 """ISBN 조회 모듈 - 원서 제목으로 ISBN 검색
 
 확장 가능한 구조:
@@ -13,10 +14,15 @@
 import difflib
 import json
 import os
+import re
+import unicodedata
 import urllib.parse
 import urllib.request
+import time
+from collections import defaultdict
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from .utils import title_score, author_matches, bilingual_titles, isbn13
 
 
 @dataclass
@@ -27,6 +33,10 @@ class ISBNResult:
     title: str
     authors: list[str]
     provider: str
+    related_isbns: tuple[str, ...] = ()
+    work_key: str | None = None
+    english_title: str | None = None
+    english_isbn: str | None = None
 
     @property
     def isbn_13(self) -> str | None:
@@ -44,6 +54,20 @@ class ISBNProvider(ABC):
 
     name: str = "base"
     timeout: int = 10
+
+    @staticmethod
+    def query_author(title, author):
+        """Query one compatible alias; retain every alias for validation.
+
+        Shop metadata may contain Latin, Japanese and Chinese spellings of
+        one writer. Concatenating them turns alternatives into required terms.
+        """
+        names = author if isinstance(author, (list, tuple)) else [author] if author else []
+        aliases = [re.sub(r'\([^)]*\)', '', name).strip() for value in names
+                   for name in re.split(r'[,、，]', str(value)) if name.strip()]
+        scripts = lambda text: {unicodedata.name(c, '').split(' ')[0] for c in text if c.isalpha()}
+        title_scripts = scripts(title)
+        return next((name for name in aliases if scripts(name) & title_scripts), aliases[0] if aliases else '')
 
     @abstractmethod
     def search(self, title: str, author: str | None = None) -> ISBNResult | None:
@@ -63,10 +87,10 @@ class ISBNProvider(ABC):
         """검색 쿼리 구성"""
         # 불필요한 공백 및 괄호 제거
         import re
-        clean_title = re.sub(r'[\(\):]', ' ', title).strip()
+        clean_title = re.sub(r"[\(\):'’]", ' ', title).strip()
         if author:
             # 저자명에서 '(지은이)', '(옮긴이)' 등 제거
-            clean_author = re.sub(r'\(.*?\)', '', author).replace(',', ' ').strip()
+            clean_author = self.query_author(title, author)
             return f"{clean_title} {clean_author}"
         return clean_title
 
@@ -87,11 +111,10 @@ class GoogleBooksProvider(ISBNProvider):
         env_paths = [".env", os.path.join(os.path.dirname(__file__), "..", ".env")]
         for env_path in env_paths:
             if os.path.exists(env_path):
-                with open(env_path) as f:
-                    for line in f:
-                        if line.startswith("GOOGLE_BOOKS_API_KEY="):
-                            self.api_key = line.strip().split("=", 1)[1]
-                            return
+                from dotenv import dotenv_values
+                self.api_key = dotenv_values(env_path).get("GOOGLE_BOOKS_API_KEY") or ""
+                if self.api_key:
+                    return
 
     def is_available(self) -> bool:
         """API 키가 설정되어 있는지 확인"""
@@ -99,6 +122,9 @@ class GoogleBooksProvider(ISBNProvider):
 
     def _api_get(self, url: str) -> dict | None:
         """Google Books API GET 요청"""
+        response = fetch_sync(url, {"User-Agent": "Mozilla/5.0"})
+        if response is not None:
+            return json.loads(response.text)
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "Mozilla/5.0")
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -125,7 +151,7 @@ class GoogleBooksProvider(ISBNProvider):
         clean_title = re.sub(r'[\(\):]', ' ', title).strip()
         search_query = f"intitle:\"{clean_title}\""
         if author:
-            clean_author = re.sub(r'\(.*?\)', '', author).split(',')[0].strip()
+            clean_author = self.query_author(title, author)
             if clean_author:
                 search_query += f" inauthor:\"{clean_author}\""
 
@@ -149,7 +175,9 @@ class GoogleBooksProvider(ISBNProvider):
                 if title.lower() in item_title.lower() or item_title.lower() in title.lower():
                     similarity = max(similarity, 0.8)
 
-                if similarity < 0.6: # 조금 더 완화
+                if not title_score(title, item_title):
+                    continue
+                if not author_matches(author, item_authors):
                     continue
 
                 isbn = self._extract_isbn(info.get("industryIdentifiers", []))
@@ -201,11 +229,7 @@ class GoogleBooksProvider(ISBNProvider):
                     }
                 return None
 
-            # 아시아 언어 → 저자명으로 영어판 검색
-            for author in authors:
-                result = self._find_english_edition_by_author(author)
-                if result:
-                    return result
+            # Author-only search cannot establish the identity of a translation.
             return None
 
         except Exception:
@@ -269,17 +293,25 @@ class OpenLibraryProvider(ISBNProvider):
     name = "open_library"
     base_url = "https://openlibrary.org/search.json"
 
-    def _api_get(self, url: str) -> dict | None:
+    def _api_get(self, url: str, *, timeout: float | None = None) -> dict | None:
         """Open Library API GET 요청"""
+        response = fetch_sync(url, {"User-Agent": "Mozilla/5.0"}, timeout=timeout or 12)
+        if response is not None:
+            return json.loads(response.text)
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "BookCrawler/1.0")
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     def search(self, title: str, author: str | None = None) -> ISBNResult | None:
         query = self._build_query(title, author)
+        # Mixing a non-Korean title with a Korean author string suppresses
+        # valid catalog matches. Verify the returned author separately.
+        import re
+        if author and re.search(r"[가-힣]", author) and not re.search(r"[가-힣]", title):
+            query = title
         encoded = urllib.parse.quote(query)
-        url = f"{self.base_url}?q={encoded}&limit=5"
+        url = f"{self.base_url}?q={encoded}&limit=8&fields=title,author_name,isbn,key,author_key,edition_count,editions,editions.title,editions.isbn,editions.key,editions.language"
 
         try:
             data = self._api_get(url)
@@ -291,8 +323,27 @@ class OpenLibraryProvider(ISBNProvider):
                 return None
 
             # 첫 번째 결과에서 ISBN 추출
+            candidates = []
             for doc in docs:
-                isbn_list = doc.get("isbn", [])
+                matched_editions = [e for e in doc.get("editions", {}).get("docs", [])
+                                    if any(title_score(title, alias) for alias in bilingual_titles(e.get("title", "")))]
+                if not title_score(title, doc.get("title", "")) and not matched_editions:
+                    continue
+                authors = doc.get("author_name", [])
+                if author and not author_matches(author, authors):
+                    aliases = []
+                    for key in doc.get("author_key", [])[:2]:
+                        if not re.fullmatch(r"OL\d+A", key):
+                            continue
+                        try:
+                            authority = self._api_get(f"https://openlibrary.org/authors/{key}.json") or {}
+                        except Exception:
+                            continue
+                        aliases.extend([authority.get("name", ""), *authority.get("alternate_names", [])])
+                    if not any(author_matches(author, name) for name in aliases):
+                        continue
+                    authors = [*authors, *aliases]
+                isbn_list = [i for e in matched_editions for i in e.get("isbn", [])] or doc.get("isbn", [])
                 if isbn_list:
                     # ISBN-13 우선 (13자리)
                     isbn_13 = next(
@@ -304,12 +355,69 @@ class OpenLibraryProvider(ISBNProvider):
                     isbn = isbn_13 or isbn_10
 
                     if isbn:
-                        return ISBNResult(
+                        candidates.append((doc.get("edition_count", 0), ISBNResult(
                             isbn=isbn,
                             title=doc.get("title", ""),
-                            authors=doc.get("author_name", []),
+                            authors=authors,
                             provider=self.name,
-                        )
+                            related_isbns=tuple(dict.fromkeys([*isbn_list, *doc.get("isbn", [])])),
+                            work_key=doc.get('key'),
+                            english_title=next((e.get('title') for e in matched_editions if 'eng' in e.get('language',[])),None),
+                            english_isbn=isbn if any('eng' in e.get('language',[]) for e in matched_editions) else None,
+                        )))
+
+            if candidates:
+                chosen=max(candidates, key=lambda item: item[0])[1]
+                # Query an English edition of this exact, already verified
+                # work. Never translate a title by guessing another search hit.
+                if chosen.work_key and re.fullmatch(r'/works/OL\d+W',chosen.work_key):
+                    enrichment_deadline=time.monotonic()+3
+                    try:
+                        params=urllib.parse.urlencode({'q':f'key:"{chosen.work_key}" language:eng','lang':'en','limit':1,
+                            'fields':'key,editions,editions.key,editions.title,editions.isbn,editions.language'})
+                        # Optional language enrichment must not discard an
+                        # already identified work by consuming its whole budget.
+                        english=self._api_get(f'{self.base_url}?{params}',timeout=3) or {}
+                        for entry in english.get('docs',[]):
+                            if entry.get('key')!=chosen.work_key:
+                                continue
+                            for edition in entry.get('editions',{}).get('docs',[]):
+                                if 'eng' in edition.get('language',[]) and edition.get('title'):
+                                    chosen.english_title=edition['title']
+                                    identifiers=edition.get('isbn',[])
+                                    chosen.english_isbn=next((i for i in identifiers if len(i)==13),next(iter(identifiers),None))
+                                    break
+                    except Exception:
+                        pass
+                    # A catalog's first "English" edition can be mislabeled,
+                    # or contain no purchasable ISBN. Prefer a title supported
+                    # by multiple ISBN-bearing English editions of this exact
+                    # work. Old public-domain records without ISBNs do not
+                    # decide the shop query. This remains optional enrichment.
+                    remaining=enrichment_deadline-time.monotonic()
+                    if remaining>0.05 and (not chosen.english_isbn or not (chosen.english_title or '').isascii()):
+                        try:
+                            data=self._api_get(f'https://openlibrary.org{chosen.work_key}/editions.json?limit=1000',timeout=remaining) or {}
+                            groups=defaultdict(dict)
+                            for edition in data.get('entries',[]):
+                                if not any(language.get('key')=='/languages/eng' for language in edition.get('languages',[])):
+                                    continue
+                                if not any(work.get('key')==chosen.work_key for work in edition.get('works',[])):
+                                    continue
+                                title=edition.get('title','').strip()
+                                identifiers=edition.get('isbn_13',[]) or edition.get('isbn_10',[])
+                                identifiers=[str(value) for value in identifiers if re.fullmatch(r'(?:\d{13}|\d{9}[\dXx])',str(value))]
+                                if not title or not identifiers:
+                                    continue
+                                key=re.sub(r'\W','',title.casefold())
+                                groups[key][isbn13(identifiers[0])]=(title,identifiers[0])
+                            if groups:
+                                winner=max(groups.values(),key=len)
+                                if len(winner)>=2:
+                                    chosen.english_title,chosen.english_isbn=next(iter(winner.values()))
+                        except Exception:
+                            pass
+                return chosen
 
             return None
 
@@ -384,62 +492,13 @@ class OpenLibraryProvider(ISBNProvider):
                 "title": title,
                 "authors": [],
                 "isbn": original_isbn,
+                "related_isbns": tuple(dict.fromkeys(i for ed in (editions_data or {}).get("entries", [])
+                    if title_score(title, ed.get("title", ""))
+                    for i in [*ed.get("isbn_13", []), *ed.get("isbn_10", [])])),
             }
 
         except Exception:
             return None
-
-
-def _scrape_yes24_original_author(korean_title: str) -> str | None:
-    """
-    Yes24에서 한국어 제목으로 검색하여 로마자 저자명 추출
-
-    Args:
-        korean_title: 한국어 책 제목
-
-    Returns:
-        로마자 저자명 또는 None
-    """
-    import re
-
-    try:
-        # Step 1: Yes24 검색
-        encoded_title = urllib.parse.quote(korean_title)
-        search_url = f"https://www.yes24.com/Product/Search?domain=ALL&query={encoded_title}"
-
-        req = urllib.request.Request(search_url)
-        req.add_header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
-
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode("utf-8")
-
-        # Step 2: 첫 번째 검색 결과의 상품 URL 추출
-        # <a class="gd_name" href="/product/goods/123456">
-        pattern = r'<a\s+class="gd_name"\s+href="(/product/goods/\d+)"'
-        match = re.search(pattern, html, re.IGNORECASE)
-        if not match:
-            return None
-
-        goods_path = match.group(1)
-        detail_url = f"https://www.yes24.com{goods_path}"
-
-        # Step 3: 상세 페이지에서 로마자 저자명 추출
-        req = urllib.request.Request(detail_url)
-        req.add_header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
-
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            detail_html = resp.read().decode("utf-8")
-
-        # <span class="name_other">(Author Name)</span>
-        author_pattern = r'<span\s+class="name_other">\(([^)]+)\)</span>'
-        author_match = re.search(author_pattern, detail_html)
-        if author_match:
-            return author_match.group(1).strip()
-
-        return None
-
-    except Exception:
-        return None
 
 
 class ISBNLookup:
@@ -451,6 +510,7 @@ class ISBNLookup:
     """
 
     def __init__(self, providers: list[ISBNProvider] | None = None):
+        self._custom_providers=providers is not None
         if providers is not None:
             self.providers = providers
         else:
@@ -490,7 +550,10 @@ class ISBNLookup:
         Returns:
             ISBNResult 또는 None
         """
-        for provider in self.providers:
+        # Work/edition links in Open Library can establish a canonical title
+        # across scripts; an arbitrary ISBN from a different translation cannot.
+        providers = self.providers if self._custom_providers else sorted(self.providers,key=lambda p:0 if p.name=="open_library" else 1)
+        for provider in providers:
             result = provider.search(title, author)
             if result:
                 return result
@@ -527,16 +590,6 @@ class ISBNLookup:
                     result = provider.find_original_by_korean_title(korean_title)
                     if result:
                         return result
-
-        # 방법 3: Yes24에서 로마자 저자명 추출 → Google Books 영어판 검색
-        if korean_title:
-            romanized_author = _scrape_yes24_original_author(korean_title)
-            if romanized_author:
-                for provider in self.providers:
-                    if hasattr(provider, "find_original_by_romanized_author"):
-                        result = provider.find_original_by_romanized_author(romanized_author)
-                        if result:
-                            return result
 
         return None
 
