@@ -20,6 +20,14 @@ class LocalStore:
             row = db.execute("SELECT payload FROM source_cache WHERE key = ?", (f"{query.casefold()}:{platform}",)).fetchone()
         return json.loads(row[0]) if row else None
 
+    def source_identity_cached(self,query,platform):
+        from api.source_identity import normalize
+        return self.platform_cached(normalize(query),f'identity-v1-{platform}')
+
+    def cache_source_identity(self,query,platform,value):
+        from api.source_identity import normalize
+        self.cache_platform(normalize(query),f'identity-v1-{platform}',value)
+
     def cache_platform(self, query, platform, value):
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO source_cache VALUES (?, ?)", (f"{query.casefold()}:{platform}", json.dumps(value)))

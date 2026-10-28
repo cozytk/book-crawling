@@ -177,9 +177,15 @@ class AmazonCrawler(BaseHttpCrawler):
             return None, ""
 
         title, rating, review_count = self._parse_detail_page(html)
+        product = BeautifulSoup(html,"html.parser").select_one('input#ASIN, input[name="ASIN"]')
+        if product and product.get('value','').upper()!=clean.upper():
+            # Amazon can render an audiobook/default child while retaining
+            # the print ISBN in the edition details. Its stars are not the
+            # selected product's aggregate.
+            self.failure_status='identity_mismatch'
+            return None,''
         if title and self._verify_product(html, title, identifier):
             if not is_isbn(identifier):
-                product = BeautifulSoup(html, "html.parser").select_one('input#ASIN, input[name="ASIN"]')
                 if not product or product.get("value", "").upper() != clean.upper():
                     return None, ""
             self._rating_loaded = True

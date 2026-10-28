@@ -18,6 +18,18 @@ class BlobStore:
     HISTORY_LIMIT = 500
 
     @staticmethod
+    def _identity_path(query,platform):
+        from api.source_identity import normalize
+        key=hashlib.sha256(normalize(query).encode()).hexdigest()
+        return f'identities/v1/{platform}/{key}.json'
+
+    def source_identity_cached(self,query,platform):
+        return self._read(self._identity_path(query,platform))
+
+    def cache_source_identity(self,query,platform,value):
+        self._write(self._identity_path(query,platform),value,overwrite=True)
+
+    @staticmethod
     def _cache_path(query):
         key = hashlib.sha256(query.casefold().encode()).hexdigest()
         return f"v{SCHEMA_VERSION}/cache/{key}.json"

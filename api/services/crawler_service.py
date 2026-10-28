@@ -3,15 +3,16 @@ import asyncio
 import uuid
 from dataclasses import dataclass, fields
 from datetime import datetime
+import time
 
 from crawler_logging import CrawlerLogger
 from crawlers import AladinCrawler, KyoboCrawler, Yes24Crawler, SarakCrawler, WatchaCrawler, GoodreadsCrawler, AmazonCrawler, LibraryThingCrawler
 from crawlers.foreign_resolver import resolve_foreign_query
 from crawlers.work_identity import resolve_work_identity, WorkIdentity
-from crawlers.transport import SearchTransport, run_parser
-from crawlers.utils import is_isbn
+from crawlers.transport import SearchTransport, run_parser, active_transport
+from crawlers.utils import is_isbn, author_matches
 from models.book import BookSearchResult, PlatformRating
-from api import platform_cache
+from api import platform_cache, source_identity
 from .volume_service import collect_volumes
 
 CRAWLERS = {"aladin": AladinCrawler, "kyobo": KyoboCrawler, "yes24": Yes24Crawler, "sarak": SarakCrawler, "watcha": WatchaCrawler, "goodreads": GoodreadsCrawler, "amazon": AmazonCrawler, "librarything": LibraryThingCrawler}
@@ -76,6 +77,7 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
         failure = []
         result = None
         status = "not_found"
+        trusted_product=False
         if cache and not force_refresh:
             cached = await platform_cache.read(cache, query, platform)
             if cached:
@@ -83,13 +85,62 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
                     on_status({"platform": platform, "status": cached["status"], "reason": cached["reason"], "source": "cache"})
                 return rating_from_dict(cached["rating"]) if cached.get("rating") else None
         try:
+            if platform=='amazon' and not is_isbn(query):
+                product=await source_identity.read(cache,query,platform)
+                if product:
+                    if identity_task is None:
+                        identity_task=asyncio.create_task(resolve_work_identity(query))
+                    try:
+                        local=await asyncio.wait_for(asyncio.shield(identity_task),3)
+                        if local.author and author_matches(local.author,product['local_author']):
+                            trusted_product=True
+                            used_detail=False
+                            deadline=time.monotonic()+9
+                            for candidate in [product,*product.get('alternates',[])]:
+                                remaining=deadline-time.monotonic()
+                                if remaining<=0.05:
+                                    break
+                                try:
+                                    result=await asyncio.wait_for(crawl_platform(AmazonCrawler,candidate['url'].rsplit('/',1)[-1],
+                                        original_query=query,execution_id=execution_id,expected_author=candidate['source_author'],
+                                        identity_title=source_identity.validation_title(candidate['title']),on_failure=failure.append),min(4,remaining))
+                                except asyncio.TimeoutError:
+                                    result=None
+                                    failure.append('timeout')
+                                if result and result.rating is not None:
+                                    result.book_title=candidate['title']
+                                    result.edition_note='확인한 상품 판본 · 상세 평점 재조회'
+                                    used_detail=True
+                                    break
+                            if not result or result.rating is None:
+                                # Retry the verified work title, not an arbitrary
+                                # catalog ISBN that may name a tiny translation.
+                                title=source_identity.validation_title(product['title'])
+                                result=await asyncio.wait_for(crawl_platform(AmazonCrawler,title,
+                                    original_query=query,execution_id=execution_id,expected_author=product['source_author'],
+                                    identity_title=title,on_failure=failure.append),4)
+                            if result and result.rating is not None:
+                                transport=active_transport()
+                                if transport:
+                                    diagnostic=transport.diagnostics.setdefault('amazon',{})
+                                    if used_detail:
+                                        diagnostic['method']='verified_product_detail'
+                                    diagnostic.update({'identity_provenance':product['provenance'],'identity_observed_at':product.get('observed_at')})
+                    except asyncio.TimeoutError:
+                        result=None
+                        failure.append('timeout')
+                    except Exception:
+                        result=None
             if platform in FOREIGN_PLATFORMS:
-                if foreign_task is None:
-                    foreign_task = asyncio.create_task(resolve_foreign_query(query))
-                foreign = await asyncio.wait_for(asyncio.shield(foreign_task), RESOLVE_TIMEOUT)
-                if not foreign.available and not foreign.isbn:
-                    status = "unavailable"
-                else:
+                foreign=None
+                if not trusted_product:
+                    if foreign_task is None:
+                        foreign_task = asyncio.create_task(resolve_foreign_query(query))
+                    foreign = await asyncio.wait_for(asyncio.shield(foreign_task), RESOLVE_TIMEOUT)
+                    if not foreign.available and not foreign.isbn:
+                        status = "unavailable"
+                        foreign=None
+                if foreign:
                     source_query = (foreign.query or foreign.isbn) if not is_isbn(query) else foreign.isbn or foreign.query
                     fallback = foreign.isbn if source_query == foreign.query else foreign.query
                     result = await asyncio.wait_for(crawl_platform(CRAWLERS[platform], source_query,
@@ -97,6 +148,20 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
                         expected_author=foreign.author, identity_isbn=foreign.isbn,
                         related_isbns=foreign.related_isbns,
                         on_failure=failure.append), PLATFORM_TIMEOUT)
+                    transport=active_transport()
+                    method=(transport.diagnostics.get('amazon',{}) if transport else {}).get('method')
+                    if platform=='amazon' and not is_isbn(query) and result and result.rating is not None and method=='verified_search_card':
+                        if identity_task is None:
+                            identity_task=asyncio.create_task(resolve_work_identity(query))
+                        try:
+                            local=await asyncio.wait_for(asyncio.shield(identity_task),3)
+                            if local.author and result.author and foreign.author and author_matches(foreign.author,result.author,strict_script=True):
+                                cache_writes.append(asyncio.create_task(source_identity.write(cache,{'version':1,'platform':'amazon',
+                                    'query':query,'title':result.book_title,'source_author':result.author,'local_author':local.author,
+                                    'url':result.url,'provenance':'server_verified_search_card','observed_at':datetime.now().isoformat(),
+                                    'expires_at':time.time()+source_identity.TTL})))
+                        except Exception:
+                            pass
             else:
                 if identity_task is None:
                     identity_task = asyncio.create_task(resolve_work_identity(query))

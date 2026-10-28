@@ -74,6 +74,15 @@ def test_amazon_population_outranks_exact_title_after_work_identity_gates():
     assert url.endswith('/0060883286') and c.rating_count==22018
 
 
+def test_amazon_print_isbn_does_not_authorize_an_audio_child_aggregate():
+    c=AmazonCrawler()
+    c.expected_identity('One Hundred Years of Solitude','Gabriel García Márquez',False)
+    html='<input id="ASIN" value="B00EF86KK2"><h1 id="productTitle">One Hundred Years of Solitude</h1>'
+    with patch.object(c,'_fetch_with_headers',return_value=html),patch.object(c,'_parse_detail_page',return_value=('One Hundred Years of Solitude',4.3,9729)):
+        assert c.search_by_identifier('0060883286')==(None,'')
+    assert c.failure_status=='identity_mismatch'
+
+
 def test_catalog_english_title_must_belong_to_the_same_verified_work():
     provider=OpenLibraryProvider()
     initial={'docs':[{'key':'/works/OL274505W','title':'Cien años de soledad','author_name':['Gabriel García Márquez'],
