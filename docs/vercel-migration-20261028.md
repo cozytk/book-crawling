@@ -85,6 +85,16 @@ Blob 기록 저장, 다른 요청에서 상세 재조회, 기록 목록, 캐시 
 
 초기 화면 JavaScript는 114KB다. 선택적인 AI 소개의 Markdown 렌더러를 필요할 때 불러온다. 비교 카드에 원점수·환산 점수·확인한 평가 수 유형·판본 기준·ISBN·원문 링크를 표시한다. 검색 기록·상세·읽을 책도 모바일에서 줄바꿈하도록 정리했다.
 
-Aside Chromium에서 데스크톱 UI와 실제 검색, 정렬, 읽을 책, 기록 조회를 점검한다. 402×681 CSS 픽셀의 동일 출처 iframe을 사용해 모바일 문서의 실제 미디어쿼리와 가로 넘침을 확인한다. Aside의 페이지 API에는 직접 viewport 크기 변경이 제공되지 않아 이 경로를 사용했다. 실제 iPhone Safari 기기 검증으로 표현하지 않는다.
+Aside Chromium에서 데스크톱 UI와 실제 검색, 정렬, 읽을 책, 기록 조회를 확인했다. 402×681 CSS 픽셀의 동일 출처 iframe을 사용해 모바일 문서의 실제 미디어쿼리와 가로 넘침을 확인한다. Aside의 페이지 API에는 직접 viewport 크기 변경이 제공되지 않아 이 경로를 사용했다. 실제 iPhone Safari 기기 검증으로 표현하지 않는다.
 
-최종 배포 도메인과 브라우저 흐름 확인은 작업 종료 시 아래에 덧붙인다.
+최종 배포 도메인과 브라우저 흐름 확인 결과는 아래와 같다.
+
+### 최종 반영 결과
+
+- 서비스: https://book-crawling.vercel.app — 기존 접근 토큰 유지.
+- 웹 운영 배포: `dpl_57uMuYptsbSYUiUr7fQz9fqoM7Lq` (`book-crawling-59jydi73b-cozytks-projects.vercel.app`). 검증한 production 빌드를 promote했다.
+- API 운영 배포: `dpl_BRFyM2fLpRETzghHZBgkSUamHMpz` (`book-crawling-jfrc8w8cg-cozytks-projects.vercel.app`). API 실행 코드 `77c33e0`, 웹 실행 코드 `3e1cc66`.
+- 최종 도메인에서 HTML 200과 실제 앱 제목, `/api/health`의 JSON·Blob 상태, 기록 목록 JSON, 평점 이벤트 4개와 완료 이벤트를 확인했다. 배포 준비 화면의 HTTP 200을 성공으로 세지 않았다. 최종 도메인의 캐시 검색 완료 관측은 0.754초였다.
+- Aside에서 실제 검색·정렬·읽을 책 추가/조회·상세·이전 규칙 경고와 모바일 결과 카드를 확인했다. 모바일 문서 폭과 scrollWidth는 모두 402px이었다. 새 화면은 최종 도메인에서도 확인했다.
+- 코드 PR: https://github.com/cozytk/book-crawling/pull/4 (draft, 미병합). 실행 코드 `3e1cc66`의 GitHub backend-tests·web-build·scope guard와 Vercel preview 검사가 모두 통과했다. 운영 반영은 CLI로 수행했으며 main 자동 배포 설정은 변경하지 않았다.
+- 최종 버전 4 실검색에서도 ISBN 국내 4곳은 상세 식별자 검증을 통과했다. ‘사피엔스’는 7곳의 책 정보를 찾았고 6곳의 평점을 수집했다. 왓챠와 LibraryThing 상세 수집은 blocked로 구분했다. LibraryThing 카드의 점수와 수치는 null로 남겼다.
