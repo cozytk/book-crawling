@@ -165,9 +165,9 @@ async def test_service_uses_shared_isbn_but_preserves_original_work_scope(monkey
     result=await crawler_service.crawl_all("데미안",["yes24","kyobo","watcha"])
     assert len(result.results)==3
     for platform,query,kwargs in calls:
-        assert query == ("데미안" if platform=="watcha" else "9788937460449")
+        assert query == ("데미안" if platform in {"watcha","kyobo"} else "9788937460449")
         assert kwargs["original_query"] == "데미안" and kwargs["expected_author"]=="헤르만 헤세"
-        assert kwargs["fallback_query"] == (None if platform=="watcha" else "데미안")
+        assert kwargs["fallback_query"] == (None if platform in {"watcha","kyobo"} else "데미안")
 
 
 async def test_adaptation_category_does_not_hide_a_general_edition(mock_aladin_key):
@@ -202,3 +202,33 @@ def test_amazon_other_audio_formats_do_not_exclude_the_selected_paperback():
     html=item("B004N59WMK","Audiobook Other formats: Paperback")+item("059368768X","Paperback Other formats: Kindle, Audiobook")
     with patch.object(crawler,"_fetch_with_headers",return_value=html):
         assert crawler.search_by_keyword("Of Human Bondage")[0].endswith("059368768X")
+
+
+async def test_shared_identity_survives_unavailable_aladin():
+    from crawlers.work_identity import resolve_work_identity
+    html='<div class="prod_item" data-isbn="9788932404806"><a class="prod_info" href="/detail/S1">전쟁과 평화(상)</a><div class="prod_author_group"><a class="author rep">레프 톨스토이</a></div></div>'
+    with patch.object(KyoboCrawler,"_fetch_html",return_value=html),patch.object(AladinCrawler,"_api_request",side_effect=TimeoutError) as aladin:
+        identity=await resolve_work_identity("전쟁과 평화")
+    assert identity.isbn=="9788932404806" and identity.author=="레프 톨스토이"
+    aladin.assert_not_called()
+
+
+async def test_unresolved_identity_cannot_reenable_other_author_first_result(monkeypatch):
+    from api.services import crawler_service
+    from crawlers.work_identity import WorkIdentity
+    monkeypatch.setattr(crawler_service,"resolve_work_identity",AsyncMock(return_value=WorkIdentity()))
+    crawl=AsyncMock()
+    monkeypatch.setattr(crawler_service,"crawl_platform",crawl)
+    statuses=[]
+    result=await crawler_service.crawl_all("동명 작품",["yes24","sarak"])
+    assert result.results==[]
+    crawl.assert_not_awaited()
+
+
+async def test_foreign_resolution_uses_verified_edition_work_when_ttb_fails():
+    from crawlers.work_identity import WorkIdentity
+    from crawlers.foreign_resolver import _resolve_foreign_query
+    with patch("crawlers.foreign_resolver.work_identity",return_value=WorkIdentity("작가","작품","9788937460449")),patch("crawlers.foreign_resolver._get_original_info",AsyncMock(return_value=None)),patch("crawlers.foreign_resolver.original_author_for_isbn",return_value="A Writer"),patch("crawlers.foreign_resolver.ISBNLookup.find_original",return_value={"title":"Verified Work","isbn":"9780132350884","authors":["A Writer"]}) as lookup:
+        result=await _resolve_foreign_query("작품")
+    assert result.query=="Verified Work" and result.isbn=="9780132350884"
+    lookup.assert_called_once_with(isbn="9788937460449")

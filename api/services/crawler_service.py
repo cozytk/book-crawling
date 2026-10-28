@@ -94,7 +94,14 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
                 # Reuse the catalog's edition identifier where supported. If
                 # that edition is unavailable, retry the title under the same
                 # author constraint. Watcha uses a title-based book catalog.
-                source_query = query if platform in {"aladin", "watcha"} else identity.isbn or query
+                if not is_isbn(query) and not identity.isbn and not identity.author:
+                    reason="비교할 작품의 저자·판본을 확인하지 못했습니다"
+                    if on_status:
+                        on_status({"platform":platform,"status":"unavailable","reason":reason,"source":"crawl"})
+                    if cache:
+                        cache_writes.append(asyncio.create_task(platform_cache.write(cache,query,platform,"unavailable",None,reason)))
+                    return None
+                source_query = query if platform in {"kyobo", "watcha"} else identity.isbn or query
                 if platform == "watcha":
                     source_query = identity.title or query
                 result = await asyncio.wait_for(crawl_platform(CRAWLERS[platform], source_query,

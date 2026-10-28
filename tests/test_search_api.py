@@ -89,7 +89,7 @@ async def test_domestic_stream_does_not_wait_for_foreign_resolution():
         return ForeignQuery(query="Demian")
     async def crawl(cls, query, *args, **kwargs):
         return PlatformRating(cls.name, 4, 5, 1, "https://example.com", query)
-    with patch.object(crawler_service, "resolve_foreign_query", resolve), patch.object(crawler_service, "crawl_platform", crawl), patch.object(crawler_service,"resolve_work_identity",AsyncMock(return_value=crawler_service.WorkIdentity())):
+    with patch.object(crawler_service, "resolve_foreign_query", resolve), patch.object(crawler_service, "crawl_platform", crawl), patch.object(crawler_service,"resolve_work_identity",AsyncMock(return_value=crawler_service.WorkIdentity(author="헤르만 헤세"))):
         stream = crawler_service.crawl_all_stream("데미안", ["yes24", "goodreads", "yes24"])
         first = await asyncio.wait_for(anext(stream), 1)
         assert first["platform"] == "yes24"

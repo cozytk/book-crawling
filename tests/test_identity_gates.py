@@ -220,7 +220,7 @@ async def test_aladin_domestic_and_foreign_share_search_and_detail(monkeypatch):
                 "subInfo": {"originalTitle": "Demian", "ratingInfo": {"ratingScore": 8.8, "ratingCount": 456}}}
         await asyncio.sleep(.01)
         return httpx.Response(200, json={"item": [item]})
-    with patch("crawlers.foreign_resolver.ISBNLookup.search", return_value=None), patch("crawlers.foreign_resolver.original_author_for_isbn", return_value=None):
+    with patch("crawlers.foreign_resolver.ISBNLookup.search", return_value=None), patch("crawlers.foreign_resolver.original_author_for_isbn", return_value=None), patch("crawlers.foreign_resolver.work_identity",return_value=crawler_service.WorkIdentity()):
         async with SearchTransport(httpx.AsyncClient(transport=httpx.MockTransport(handler))) as transport:
             domestic, foreign = await asyncio.gather(crawler_service.crawl_platform(AladinCrawler, "데미안"), resolve_foreign_query("데미안"))
             assert domestic.rating == 8.8 and foreign.query == "Demian"

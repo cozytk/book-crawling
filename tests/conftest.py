@@ -44,5 +44,5 @@ def empty_work_identity(monkeypatch):
     from api.services import crawler_service
     from crawlers.work_identity import WorkIdentity
     async def identify(query):
-        return WorkIdentity()
+        return WorkIdentity(author="Fixture Author")
     monkeypatch.setattr(crawler_service,"resolve_work_identity",identify)

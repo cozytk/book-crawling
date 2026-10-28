@@ -19,6 +19,7 @@ from crawlers.isbn_lookup import ISBNLookup
 from crawlers.utils import is_isbn, clean_isbn
 from crawlers.transport import run_parser
 from crawlers.yes24 import original_author_for_isbn
+from crawlers.work_identity import work_identity
 
 logger = CrawlerLogger("foreign_resolver")
 
@@ -72,10 +73,22 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
     if is_isbn(korean_query):
         isbn = clean_isbn(korean_query)
         return ForeignQuery(query=isbn, isbn=isbn)
-    info = await _get_original_info(korean_query)
+    identity = work_identity(korean_query)
+    info = await _get_original_info(identity.isbn or korean_query)
     if not info:
+        lookup = ISBNLookup()
+        roman_author = None
+        if identity.isbn:
+            try:
+                roman_author = original_author_for_isbn(identity.isbn, identity.author)
+                original = lookup.find_original(isbn=identity.isbn)
+                if original:
+                    return ForeignQuery(query=original["title"],isbn=original.get("isbn"),
+                                        author=original.get("authors") or roman_author)
+            except Exception:
+                pass
         if not _is_korean(korean_query):
-            candidate = ISBNLookup().search(korean_query)
+            candidate = lookup.search(korean_query, roman_author)
             return ForeignQuery(query=candidate.title if candidate else korean_query,
                                 isbn=candidate.isbn if candidate else None,
                                 author=candidate.authors if candidate else None)

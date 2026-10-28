@@ -114,7 +114,8 @@ class TestCrawlAllPlatforms:
         aladin_search = json.loads(load_fixture("aladin_search_response.json"))
         aladin_lookup = json.loads(load_fixture("aladin_lookup_response.json"))
 
-        with patch.object(AladinCrawler, "_api_request") as mock_aladin:
+        from crawlers.work_identity import WorkIdentity
+        with patch.object(AladinCrawler, "_api_request") as mock_aladin, patch("crawlers.foreign_resolver.work_identity",return_value=WorkIdentity()), patch("crawlers.foreign_resolver.original_author_for_isbn",return_value=None):
             mock_aladin.side_effect = [
                 aladin_search,  # _get_original_title의 search
                 aladin_lookup,  # get_original_title

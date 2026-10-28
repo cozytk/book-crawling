@@ -66,6 +66,9 @@ class AladinCrawler(BaseHttpCrawler):
             return None
 
     async def search_book(self, query: str) -> tuple[str | None, str]:
+        return self.search_book_sync(query)
+
+    def search_book_sync(self, query: str) -> tuple[str | None, str]:
         """책 검색 후 상세 페이지 URL과 itemId 반환"""
         self.logger.search_start(
             query,

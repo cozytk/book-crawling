@@ -100,7 +100,8 @@ class SearchTransport:
                         response = httpx.Response(page.status_code, content=page.content, headers=response_headers,
                                                   request=httpx.Request("GET", str(page.url)))
                     else:
-                        response = await self.client.get(url, headers=headers, follow_redirects=False)
+                        timeout = httpx.Timeout(4, connect=3) if domain == "www.aladin.co.kr" else self.client.timeout
+                        response = await self.client.get(url, headers=headers, follow_redirects=False, timeout=timeout)
             except httpx.TimeoutException:
                 raise FetchFailure("timeout") from None
             except httpx.HTTPError:
