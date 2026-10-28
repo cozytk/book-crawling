@@ -1,0 +1,22 @@
+[
+  {"query":"햄릿","author":"윌리엄 셰익스피어","original":"Hamlet","original_author":"William Shakespeare","series_volumes":"3"},
+  {"query":"오만과 편견","author":"제인 오스틴","original":"Pride and Prejudice","original_author":"Jane Austen","series_volumes":"88"},
+  {"query":"레 미제라블","author":"빅토르 위고","original":"Les Misérables","original_author":"Victor Hugo","series_volumes":"301–305"},
+  {"query":"죄와 벌","author":"도스토예프스키","original":"Crime and Punishment","original_author":"Fyodor Dostoevsky","series_volumes":"284–285"},
+  {"query":"동물농장","author":"조지 오웰","original":"Animal Farm","original_author":"George Orwell","series_volumes":"5"},
+  {"query":"1984","author":"조지 오웰","original":"Nineteen Eighty-Four","original_author":"George Orwell","series_volumes":"77"},
+  {"query":"이방인","author":"알베르 카뮈","original":"The Stranger","original_author":"Albert Camus","series_volumes":"266"},
+  {"query":"페스트","author":"알베르 카뮈","original":"The Plague","original_author":"Albert Camus","series_volumes":"267"},
+  {"query":"위대한 개츠비","author":"F. 스콧 피츠제럴드","original":"The Great Gatsby","original_author":"F. Scott Fitzgerald","series_volumes":"75"},
+  {"query":"호밀밭의 파수꾼","author":"J. D. 샐린저","original":"The Catcher in the Rye","original_author":"J. D. Salinger","series_volumes":"47"},
+  {"query":"데미안","author":"헤르만 헤세","original":"Demian","original_author":"Hermann Hesse","series_volumes":"44"},
+  {"query":"인간의 굴레에서","author":"서머싯 몸","original":"Of Human Bondage","original_author":"W. Somerset Maugham","series_volumes":"11–12"},
+  {"query":"참을 수 없는 존재의 가벼움","author":"밀란 쿤데라","original":"The Unbearable Lightness of Being","original_author":"Milan Kundera","series_volumes":"234"},
+  {"query":"노인과 바다","author":"어니스트 헤밍웨이","original":"The Old Man and the Sea","original_author":"Ernest Hemingway","series_volumes":"278"},
+  {"query":"카라마조프가의 형제들","author":"도스토예프스키","original":"The Brothers Karamazov","original_author":"Fyodor Dostoevsky","series_volumes":"154–156"},
+  {"query":"안나 카레니나","author":"레프 톨스토이","original":"Anna Karenina","original_author":"Leo Tolstoy","series_volumes":"219–221"},
+  {"query":"수레바퀴 아래","author":"헤르만 헤세","original":"Beneath the Wheel","original_author":"Hermann Hesse","series_volumes":"50"},
+  {"query":"싯다르타","author":"헤르만 헤세","original":"Siddhartha","original_author":"Hermann Hesse","series_volumes":"58"},
+  {"query":"백년의 고독","author":"가브리엘 가르시아 마르케스","original":"One Hundred Years of Solitude","original_author":"Gabriel García Márquez","series_volumes":"34–35"},
+  {"query":"젊은 베르테르의 슬픔","author":"요한 볼프강 폰 괴테","original":"The Sorrows of Young Werther","original_author":"Johann Wolfgang von Goethe","series_volumes":"25"}
+]

@@ -166,12 +166,23 @@ class GoodreadsCrawler(BaseHttpCrawler):
             # node must still prove the known author before a rating is used.
             return candidate_score(keyword, link.get_text(" ", strip=True), authors,
                                    self._expected_author if authors else None)
-        book_link = max(links, key=score, default=None)
+        def support(link):
+            container = link.find_parent("tr") or link.find_parent(class_="Book") or link.parent
+            counter=container.select_one('[data-testid="book-item-ratings-count"], .minirating')
+            text=counter.get_text(' ',strip=True) if counter else ''
+            # Rounded search counts are ranking hints only. Exact output
+            # counts always come from the selected Book's detail aggregate.
+            match=re.search(r'([\d,.]+)\s*(k|m|thousand|million)?\s*ratings?',text,re.I)
+            if not match:
+                return 0
+            value=float(match.group(1).replace(',',''))
+            return value*{'k':1000,'m':1000000,'thousand':1000,'million':1000000}.get((match.group(2) or '').lower(),1)
+        book_link = max((link for link in links if score(link)), key=lambda link:(support(link),score(link)), default=None)
         transport = active_transport()
         if transport:
             transport.diagnostics.setdefault(self.name, {}).update({"query": keyword,
                 "page_title": soup.title.get_text() if soup.title else None,
-                "candidates": [{"title":a.get_text(" ",strip=True),"score":score(a)} for a in links[:6]],
+                "candidates": [{"title":a.get_text(" ",strip=True),"score":score(a),"ranking_ratings":support(a)} for a in links[:6]],
                 "total_candidates":len(links)})
         if book_link and not score(book_link):
             book_link = None

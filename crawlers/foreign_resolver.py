@@ -91,8 +91,8 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
                 pass
         if not _is_korean(korean_query):
             candidate = lookup.search(korean_query, roman_author)
-            return ForeignQuery(query=candidate.title if candidate else korean_query,
-                                isbn=candidate.isbn if candidate else None,
+            return ForeignQuery(query=(candidate.english_title or candidate.title) if candidate else korean_query,
+                                isbn=(candidate.english_isbn or candidate.isbn) if candidate else None,
                                 author=candidate.authors if candidate else None,
                                 related_isbns=candidate.related_isbns if candidate else ())
         return ForeignQuery()
@@ -128,12 +128,12 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
                 return ForeignQuery(query=original['title'],isbn=original['isbn'],
                     author=original.get('authors') or re.split(r'[,、，]',original_author or ''),
                     related_isbns=original.get('related_isbns',()))
-        foreign_isbn = candidate.isbn if candidate else None
+        foreign_isbn = (candidate.english_isbn or candidate.isbn) if candidate else None
         if foreign_isbn:
             logger.debug(f"원서 연결: {original_title} → ISBN {foreign_isbn}")
         else:
             logger.debug(f"원서 연결 (ISBN 없음): {original_title}")
-        query = re.split(r"\s[-–—]\s|[:：]|\s/\s", candidate.title if candidate else primary,maxsplit=1)[0].strip()
+        query = re.split(r"\s[-–—]\s|[:：]|\s/\s", (candidate.english_title or candidate.title) if candidate else primary,maxsplit=1)[0].strip()
         return ForeignQuery(query=query, isbn=foreign_isbn,
                             author=candidate.authors if candidate else re.split(r"[,、，]", original_author or ""),
                             related_isbns=candidate.related_isbns if candidate else ())

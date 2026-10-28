@@ -64,7 +64,13 @@ def volume_info(title):
 def title_score(query: str, title: str) -> float:
     """Identity gates precede ranking; subtitles cannot hide a derivative work."""
     def normalize(value):
-        return "".join(c for c in unicodedata.normalize("NFKC", value).casefold() if c.isalnum())
+        value=unicodedata.normalize('NFC',''.join(c for c in unicodedata.normalize('NFD',unicodedata.normalize('NFKC',value).casefold())
+                                               if unicodedata.category(c)!='Mn'))
+        # A Korean locative ending can differ between the user's short title
+        # and the catalog spelling ("아래" / "아래서"). Do not allow arbitrary
+        # extra words: all derivative and volume gates below still apply.
+        value=re.sub(r'아래서(?=$|\s*[(\[])','아래',value)
+        return "".join(c for c in value if c.isalnum())
 
     title = re.split(r"\s+by\s+", title, flags=re.I)[0]
     q, t = normalize(query), normalize(title)
@@ -226,9 +232,14 @@ def author_matches(expected, actual, strict_script=False):
         left_name, right_name = compact(expected_text), compact(actual_text)
         if len(left_name) >= 3 and left_name in right_name:
             return True
-    normalize = lambda s: set(re.findall(r"[a-z가-힣]+", s.casefold())) - {"by", "author", "지은이", "옮긴이"}
+    def normalize(value):
+        # Latin-only tokenization made any two Cyrillic names match because
+        # both token sets were empty. Fold accents but retain Unicode letters.
+        folded=unicodedata.normalize('NFC',''.join(c for c in unicodedata.normalize('NFD',value.casefold())
+                                                if unicodedata.category(c)!='Mn'))
+        return set(re.findall(r'[^\W\d_]+',folded)) - {"by", "author", "지은이", "옮긴이"}
     left, right = normalize(expected_text), normalize(actual_text)
-    return len(left & right) >= min(2, len(left), len(right)) if left and right else True
+    return len(left & right) >= min(2, len(left), len(right)) if left and right else False
 
 
 def structured_isbns(container):

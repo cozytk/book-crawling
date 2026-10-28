@@ -32,6 +32,9 @@ class ISBNResult:
     authors: list[str]
     provider: str
     related_isbns: tuple[str, ...] = ()
+    work_key: str | None = None
+    english_title: str | None = None
+    english_isbn: str | None = None
 
     @property
     def isbn_13(self) -> str | None:
@@ -306,7 +309,7 @@ class OpenLibraryProvider(ISBNProvider):
         if author and re.search(r"[가-힣]", author) and not re.search(r"[가-힣]", title):
             query = title
         encoded = urllib.parse.quote(query)
-        url = f"{self.base_url}?q={encoded}&limit=8&fields=title,author_name,isbn,key,author_key,edition_count,editions,editions.title,editions.isbn,editions.key"
+        url = f"{self.base_url}?q={encoded}&limit=8&fields=title,author_name,isbn,key,author_key,edition_count,editions,editions.title,editions.isbn,editions.key,editions.language"
 
         try:
             data = self._api_get(url)
@@ -356,10 +359,32 @@ class OpenLibraryProvider(ISBNProvider):
                             authors=authors,
                             provider=self.name,
                             related_isbns=tuple(dict.fromkeys([*isbn_list, *doc.get("isbn", [])])),
+                            work_key=doc.get('key'),
+                            english_title=next((e.get('title') for e in matched_editions if 'eng' in e.get('language',[])),None),
+                            english_isbn=isbn if any('eng' in e.get('language',[]) for e in matched_editions) else None,
                         )))
 
             if candidates:
-                return max(candidates, key=lambda item: item[0])[1]
+                chosen=max(candidates, key=lambda item: item[0])[1]
+                # Query an English edition of this exact, already verified
+                # work. Never translate a title by guessing another search hit.
+                if chosen.work_key and re.fullmatch(r'/works/OL\d+W',chosen.work_key):
+                    try:
+                        params=urllib.parse.urlencode({'q':f'key:"{chosen.work_key}" language:eng','lang':'en','limit':1,
+                            'fields':'key,editions,editions.key,editions.title,editions.isbn,editions.language'})
+                        english=self._api_get(f'{self.base_url}?{params}') or {}
+                        for entry in english.get('docs',[]):
+                            if entry.get('key')!=chosen.work_key:
+                                continue
+                            for edition in entry.get('editions',{}).get('docs',[]):
+                                if 'eng' in edition.get('language',[]) and edition.get('title'):
+                                    chosen.english_title=edition['title']
+                                    identifiers=edition.get('isbn',[])
+                                    chosen.english_isbn=next((i for i in identifiers if len(i)==13),next(iter(identifiers),None))
+                                    break
+                    except Exception:
+                        pass
+                return chosen
 
             return None
 

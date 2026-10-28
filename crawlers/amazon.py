@@ -224,7 +224,7 @@ class AmazonCrawler(BaseHttpCrawler):
             if not title_match or not author_ok:
                 return (0,0,0,0)
             score,voters,written,display=self._card_rating(row,row.get('data-asin',''))
-            return (1,score is not None,title_match,voters or written or display or 0)
+            return (1,score is not None,voters or written or display or 0,title_match)
         candidates.sort(key=rank_card,reverse=True)
         for result in candidates:
             asin = result.get("data-asin", "")

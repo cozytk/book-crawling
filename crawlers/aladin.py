@@ -11,6 +11,8 @@ import urllib.request
 from .base_http import BaseHttpCrawler
 from .utils import title_score, is_isbn, clean_isbn, author_matches, candidate_score
 from models.book import PlatformRating
+from bs4 import BeautifulSoup
+import re
 
 
 class AladinCrawler(BaseHttpCrawler):
@@ -68,6 +70,48 @@ class AladinCrawler(BaseHttpCrawler):
     async def search_book(self, query: str) -> tuple[str | None, str]:
         return self.search_book_sync(query)
 
+    def _popular_product(self, query):
+        """Native review ordering discovers older editions hidden by sales rank."""
+        url=f'{self.base_url}/search/wsearchresult.aspx?SearchTarget=Book&SearchWord={urllib.parse.quote(query)}&SortOrder=4'
+        try:
+            soup=BeautifulSoup(self._fetch_html(url),'html.parser')
+        except Exception:
+            return None
+        candidates=[]
+        for row in soup.select('.ss_book_list'):
+            link=row.select_one('a.bo3')
+            if not link:
+                continue
+            title=link.get_text(' ',strip=True)
+            lines=[li.get_text(' ',strip=True) for li in row.select('li')]
+            author=next((line for line in lines if '(지은이)' in line),'')
+            title_line=next((line for line in lines if title in line and '[국내도서]' in line),title)
+            if not author or re.search(r'원작|각색|엮은이',author):
+                continue
+            if re.search(r'세트|전\s*\d+\s*권',title):
+                continue
+            if any(word in title_line and word not in query for word in ('청소년','어린이','논술','문학툰','만화','명작동화')):
+                continue
+            score=candidate_score(query,title,author,self._expected_author)
+            count=next((int(m.group(1).replace(',','')) for line in lines
+                        if (m:=re.search(r'\d+(?:\.\d+)?\s*\(\s*([\d,]+)\s*\)\s*\|?\s*세일즈포인트',line))),None)
+            item_id=urllib.parse.parse_qs(urllib.parse.urlsplit(link.get('href','')).query).get('ItemId',[''])[0]
+            if score and count is not None and item_id.isdigit():
+                candidates.append((count,score,item_id,title))
+        if not candidates:
+            return None
+        _,_,item_id,title=max(candidates)
+        result=self._api_request('ItemLookUp.aspx',{'itemIdType':'ItemId','ItemId':item_id,'OptResult':'ratingInfo'})
+        item=next((i for i in (result or {}).get('item',[]) if str(i.get('itemId'))==item_id),None)
+        if not item or not candidate_score(query,item.get('title',''),item.get('author',''),self._expected_author):
+            return None
+        from .transport import active_transport
+        transport=active_transport()
+        if transport:
+            transport.diagnostics[self.name]={'method':'verified_review_order','item_id':item_id,
+                'candidates':[{'item_id':c[2],'count':c[0],'title':c[3]} for c in sorted(candidates,reverse=True)[:6]]}
+        return {'item':[item]}
+
     def search_book_sync(self, query: str) -> tuple[str | None, str]:
         """책 검색 후 상세 페이지 URL과 itemId 반환"""
         self.logger.search_start(
@@ -94,7 +138,9 @@ class AladinCrawler(BaseHttpCrawler):
                 "itemIdType": "ISBN13" if len(clean_isbn(query)) == 13 else "ISBN",
             })
         else:
-            result = self._api_request("ItemSearch.aspx", params)
+            result = self._popular_product(query) if getattr(self,'_prefer_popular_edition',False) else None
+            if result is None:
+                result = self._api_request("ItemSearch.aspx", params)
         if not result or not result.get("item"):
             self.logger.search_complete(
                 query, found=False, method="api",
@@ -271,7 +317,8 @@ class AladinCrawler(BaseHttpCrawler):
             "OptResult": "ratingInfo",
         }
 
-        result = self._api_request("ItemLookUp.aspx", params)
+        current=getattr(self,'_current_item',{})
+        result={'item':[current]} if current.get('subInfo',{}).get('ratingInfo') else self._api_request("ItemLookUp.aspx", params)
         if not result or not result.get("item"):
             self.logger.debug("original_title_not_found", reason="no_item_in_response")
             return None
@@ -329,7 +376,8 @@ class AladinCrawler(BaseHttpCrawler):
             "OptResult": "ratingInfo",
         }
 
-        result = self._api_request("ItemLookUp.aspx", params)
+        current=getattr(self,'_current_item',{})
+        result={'item':[current]} if current.get('subInfo',{}).get('ratingInfo') else self._api_request("ItemLookUp.aspx", params)
         if not result or not result.get("item"):
             self.logger.rating_complete(None, 0, method="api")
             return None, 0

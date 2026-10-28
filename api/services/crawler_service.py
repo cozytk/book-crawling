@@ -18,7 +18,7 @@ CRAWLERS = {"aladin": AladinCrawler, "kyobo": KyoboCrawler, "yes24": Yes24Crawle
 FOREIGN_PLATFORMS = {"goodreads", "amazon", "librarything"}
 logger = CrawlerLogger("api")
 PLATFORM_TIMEOUT = 18
-RESOLVE_TIMEOUT = 12
+RESOLVE_TIMEOUT = 16
 REASONS = {"not_found": "일치하는 책을 찾지 못했습니다", "identity_mismatch": "상품·제목·ISBN이 일치하지 않습니다",
            "blocked": "사이트에서 수집을 차단하거나 요청을 제한했습니다", "timeout": "응답 대기 시간을 초과했습니다",
            "parse_error": "사이트 응답에서 책 또는 평점 정보를 확인하지 못했습니다", "network_error": "사이트 연결에 실패했습니다",
@@ -27,7 +27,7 @@ REASONS = {"not_found": "일치하는 책을 찾지 못했습니다", "identity_
 
 async def crawl_platform(crawler_cls, query, fallback_query=None, original_query=None, execution_id=None,
                          expected_author=None, on_failure=None, identity_title=None, identity_isbn=None,
-                         related_isbns=(), strict_edition=False):
+                         related_isbns=(), strict_edition=False, prefer_popular=False):
     async def execute():
         async with crawler_cls() as crawler:
             crawler.set_session(uuid.uuid4().hex[:8], original_query or query, execution_id=execution_id)
@@ -35,6 +35,7 @@ async def crawl_platform(crawler_cls, query, fallback_query=None, original_query
             crawler.expected_identity(expected_title, expected_author, strict_isbn=strict_edition or is_isbn(original_query or query))
             crawler._preferred_isbn = identity_isbn
             crawler._related_isbns = related_isbns if not is_isbn(original_query or query) else ()
+            crawler._prefer_popular_edition=prefer_popular
             result = await crawler.crawl(query, attempt=1)
             first_failure = crawler.failure_status
             if result is None and fallback_query and fallback_query != query and not is_isbn(original_query or ""):
@@ -113,7 +114,7 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
                     if cache:
                         cache_writes.append(asyncio.create_task(platform_cache.write(cache,query,platform,"unavailable",None,reason)))
                     return None
-                source_query = query if platform in {"kyobo", "watcha"} else identity.isbn or query
+                source_query = query if platform in {"kyobo", "watcha", "aladin"} else identity.isbn or query
                 if platform == "watcha":
                     source_query = identity.title or query
                 if platform in {'kyobo','aladin','yes24','sarak'} and len(identity.editions)>1:
@@ -127,6 +128,7 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
                         fallback_query=query if source_query != query and platform != "watcha" else None, original_query=query,
                         execution_id=execution_id, expected_author=identity.author, identity_title=identity.title,
                         identity_isbn=identity.isbn,
+                        prefer_popular=platform=='aladin' and not is_isbn(query),
                         on_failure=failure.append), PLATFORM_TIMEOUT)
             if result and ((result.rating is not None and result.review_count is not None) or result.rating_count == 0 or result.text_review_count == 0):
                 status = "done"

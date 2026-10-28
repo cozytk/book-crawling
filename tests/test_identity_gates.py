@@ -224,4 +224,6 @@ async def test_aladin_domestic_and_foreign_share_search_and_detail(monkeypatch):
         async with SearchTransport(httpx.AsyncClient(transport=httpx.MockTransport(handler))) as transport:
             domestic, foreign = await asyncio.gather(crawler_service.crawl_platform(AladinCrawler, "데미안"), resolve_foreign_query("데미안"))
             assert domestic.rating == 8.8 and foreign.query == "Demian"
-            assert sum(transport.counts.values()) == 2
+            # This fixture already includes both originalTitle and ratingInfo;
+            # neither consumer should refetch a complete aggregate.
+            assert sum(transport.counts.values()) == 1
