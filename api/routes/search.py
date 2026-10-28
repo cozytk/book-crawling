@@ -1,6 +1,7 @@
 """Book search, streaming results, and saved history."""
 import asyncio
 import json
+import logging
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -10,6 +11,7 @@ from api.services.crawler_service import CRAWLERS, crawl_all, crawl_all_stream, 
 from api.services.ai_service import generate_book_description, generate_book_description_stream
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class SearchRequest(BaseModel):
@@ -42,6 +44,10 @@ def cached_for(client, query, platforms=None):
         return None
     selected = set(platforms if platforms is not None else CRAWLERS)
     found = {r["platform"] for r in cached["ratings"]}
+    if cached["search"].get("schema_version") != 3 or not selected.issubset(found):
+        return None
+    if any(r.get("normalized_rating") is None or r.get("review_count") is None for r in cached["ratings"] if r["platform"] in selected):
+        return None
     covered = set(cached["search"].get("requested_platforms", found))
     if not selected.issubset(covered):
         return None
@@ -52,19 +58,21 @@ def cached_for(client, query, platforms=None):
 async def lookup(req):
     try:
         client = await asyncio.to_thread(get_client)
-        cached = None if req.force_refresh else await asyncio.to_thread(cached_for, client, req.query, req.platforms)
+        cached = None if req.force_refresh else await asyncio.wait_for(asyncio.to_thread(cached_for, client, req.query, req.platforms), 3)
         return client, cached
     except Exception:
+        logger.warning("Search cache unavailable")
         return None, None
 
 
 async def persist(client, query, results, platforms=None):
     if client and results:
         try:
-            return await asyncio.to_thread(save_search_result, client, query, results, list(platforms if platforms is not None else CRAWLERS))
+            saved = await asyncio.wait_for(asyncio.to_thread(save_search_result, client, query, results, list(platforms if platforms is not None else CRAWLERS)), 8)
+            return {**saved, "storage_saved": True}
         except Exception:
-            pass
-    return {"id": None, "query": query, **summarize(results)}
+            logger.warning("Search history could not be saved")
+    return {"id": None, "query": query, "storage_saved": False, **summarize(results)}
 
 
 def with_coverage(search, ratings, platforms):
@@ -79,10 +87,15 @@ async def search_book(req: SearchRequest):
     if cached:
         response = {"source": "cache", **cached}
     else:
-        result = await crawl_all(req.query, req.platforms)
+        result = await crawl_all(req.query, req.platforms, req.force_refresh, client)
         ratings = result.to_dict()["results"]
         response = {"source": "crawl", "search": await persist(client, req.query, ratings, req.platforms), "ratings": ratings}
-    response["description"] = await generate_book_description(req.query) if req.include_description and response["ratings"] else None
+    response["description"] = None
+    if req.include_description and response["ratings"]:
+        try:
+            response["description"] = await asyncio.wait_for(generate_book_description(req.query), 20)
+        except Exception:
+            logger.warning("Optional book description unavailable")
     response["search"] = with_coverage(response["search"], response["ratings"], req.platforms)
     return response
 
@@ -105,6 +118,8 @@ async def get_search(search_id: UUID):
         raise HTTPException(status_code=503, detail="데이터베이스 연결 실패")
     if saved is None:
         raise HTTPException(status_code=404, detail="검색 결과를 찾을 수 없습니다")
+    if saved["search"].get("schema_version") != 3:
+        saved["search"]["legacy_validation"] = True
     return {"source": "cache", **saved}
 
 
@@ -123,8 +138,9 @@ async def search_book_stream(req: SearchRequest):
                 if cached:
                     for rating in cached["ratings"]:
                         await queue.put(("rating", rating))
+                    await queue.put(("metrics", {"http_requests": 0, "requests_by_domain": {}}))
                 else:
-                    async for rating in crawl_all_stream(req.query, req.platforms):
+                    async for rating in crawl_all_stream(req.query, req.platforms, lambda status: queue.put_nowait(("platform_status", status)), req.force_refresh, client, lambda metrics: queue.put_nowait(("metrics", metrics))):
                         await queue.put(("rating", rating))
             except Exception:
                 await queue.put(("error", {"message": "검색 중 오류가 발생했습니다"}))
@@ -134,8 +150,9 @@ async def search_book_stream(req: SearchRequest):
         async def describe():
             try:
                 if req.include_description:
-                    async for chunk in generate_book_description_stream(req.query):
-                        await queue.put(("description_chunk", {"chunk": chunk}))
+                    async with asyncio.timeout(20):
+                        async for chunk in generate_book_description_stream(req.query):
+                            await queue.put(("description_chunk", {"chunk": chunk}))
             except Exception:
                 pass
             finally:

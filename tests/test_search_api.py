@@ -56,12 +56,11 @@ def test_stream_cache_history_roundtrip(client):
     assert len(response.json()["searches"]) == 1
 
 
-def test_partial_all_platform_search_reuses_its_exact_scope(client):
+def test_partial_search_does_not_freeze_failures_for_24_hours(client):
     api, store = client
     save_search_result(store, "데미안", [rating()], list(crawler_service.CRAWLERS))
-    response = api.post("/api/search", json={"query": "데미안"}).json()
-    assert response["source"] == "cache"
-    assert "amazon" in response["search"]["missing_platforms"]
+    assert api.get("/api/search/check?query=데미안").json() == {"cached": False}
+    assert api.get("/api/search/check?query=데미안&platforms=yes24").json()["cached"]
 
 
 @pytest.mark.parametrize("payload", [{"query": " "}, {"query": "x", "platforms": []}, {"query": "x", "platforms": ["wrong"]}])

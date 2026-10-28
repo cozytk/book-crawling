@@ -1,68 +1,18 @@
 import { PlatformRating, PLATFORM_META } from "@/lib/api";
 
-interface RatingCardProps {
-  rating: PlatformRating;
-}
-
-export default function RatingCard({ rating }: RatingCardProps) {
-  const meta = PLATFORM_META[rating.platform] || {
-    label: rating.platform,
-    color: "#666",
-  };
-  const normalized = rating.normalized_rating;
-  const barWidth = normalized ? (normalized / 10) * 100 : 0;
-
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow">
-      {/* 플랫폼 헤더 */}
-      <div className="flex items-center justify-between mb-3">
-        <span
-          className="text-sm font-semibold px-2.5 py-1 rounded-full text-white"
-          style={{ backgroundColor: meta.color }}
-        >
-          {meta.label}
-        </span>
-        {normalized !== null && (
-          <span className="text-2xl font-bold tabular-nums">
-            {normalized.toFixed(1)}
-            <span className="text-sm font-normal text-gray-400">/10</span>
-          </span>
-        )}
-      </div>
-
-      {/* 책 제목 */}
-      <p className="text-sm text-gray-700 mb-3 truncate" title={rating.book_title}>
-        {rating.book_title || "-"}
-      </p>
-
-      {/* 평점 바 */}
-      <div className="w-full bg-gray-100 rounded-full h-2.5 mb-3">
-        <div
-          className="h-2.5 rounded-full transition-all duration-500"
-          style={{ width: `${barWidth}%`, backgroundColor: meta.color }}
-        />
-      </div>
-
-      {/* 하단 정보 */}
-      <div className="flex items-center justify-between text-xs text-gray-500">
-        <span>
-          {rating.rating !== null
-            ? `${rating.rating}/${rating.rating_scale}`
-            : "N/A"}
-        </span>
-        <span>{rating.review_count.toLocaleString()}개 리뷰</span>
-      </div>
-
-      {/* 링크 */}
-      <a
-        href={rating.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="mt-3 block text-center text-xs text-blue-600 hover:text-blue-800
-                   py-1.5 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
-      >
-        상세 페이지 보기
-      </a>
-    </div>
-  );
+export default function RatingCard({ rating }: { rating: PlatformRating }) {
+  const meta = PLATFORM_META[rating.platform] || { label: rating.platform, color: "#666" };
+  const score = rating.normalized_rating;
+  const safeUrl = /^https?:\/\//i.test(rating.url) ? rating.url : null;
+  return <article className="rating-card">
+    <div className="rating-platform"><span className="platform-dot" style={{ background: meta.color }} />{meta.label}<span className="rating-scale">10점 환산</span></div>
+    <div className="rating-score">{score === null ? "—" : score.toFixed(1)}<span>/ 10</span></div>
+    <div className="rating-bar"><div style={{ width: `${Math.max(0, Math.min(100, (score ?? 0) * 10))}%`, background: meta.color }} /></div>
+    <p className="rating-title">{rating.book_title || "제목 정보 없음"}</p>
+    {rating.author && <p className="rating-metadata">{rating.author}</p>}
+    <div className="rating-original"><span>{rating.rating === null ? "평점 정보 없음" : `원점수 ${rating.rating} / ${rating.rating_scale}`}</span><strong>{rating.rating_count != null ? `별점 참여 ${rating.rating_count.toLocaleString()}명` : rating.text_review_count != null ? `글 리뷰 ${rating.text_review_count.toLocaleString()}개` : rating.review_count != null ? `평가 ${rating.review_count.toLocaleString()}개` : "평가 수 수집되지 않음"}</strong></div>
+    {rating.rating_count != null && rating.text_review_count != null && <p className="rating-metadata">글 리뷰 {rating.text_review_count.toLocaleString()}개</p>}
+    <p className="rating-metadata">{rating.comparison_scope === "edition" ? "지정 ISBN 판본" : "작품 기준 · 판본은 사이트마다 다를 수 있음"}{rating.isbn ? ` · ${rating.isbn}` : ""}</p>
+    {safeUrl && <a className="rating-link" href={safeUrl} target="_blank" rel="noopener noreferrer">{meta.label}에서 책 확인<span aria-hidden="true">↗</span></a>}
+  </article>;
 }

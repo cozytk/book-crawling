@@ -6,7 +6,7 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import title_score
+from .utils import title_score, book_node, valid_rating, count_number
 
 
 class WatchaCrawler(BaseHttpCrawler):
@@ -40,8 +40,10 @@ class WatchaCrawler(BaseHttpCrawler):
         if not book_links:
             return None, ""
 
-        first_link = max(book_links, key=lambda link: title_score(keyword, link.get_text(strip=True)))
-        if not title_score(keyword, first_link.get_text(strip=True)):
+        def clean_title(link):
+            return re.split(r"\s*\d{4}\s*[・·]|[・·]", link.get_text(" ", strip=True))[0].strip()
+        first_link = max(book_links, key=lambda link: title_score(keyword, clean_title(link)))
+        if not title_score(keyword, clean_title(first_link)):
             return None, ""
         href = first_link.get("href")
 
@@ -49,8 +51,8 @@ class WatchaCrawler(BaseHttpCrawler):
             return None, ""
 
         # 링크 텍스트에서 제목 추출 (연도・저자 정보 제거)
-        title_text = first_link.get_text(strip=True)
-        title = re.sub(r"\s*\d{4}\s*・.*$", "", title_text).strip()
+        title = clean_title(first_link)
+        self._selected_title = title
 
         book_url = f"{self.base_url}{href}" if href.startswith("/") else href
 
@@ -67,39 +69,14 @@ class WatchaCrawler(BaseHttpCrawler):
 
         soup = BeautifulSoup(html, "html.parser")
 
-        rating = None
-        review_count = 0
-
-        text_content = soup.get_text()
-
-        # 평점 추출: "평균 4.0" 패턴
-        rating_match = re.search(r"평균\s+([\d.]+)", text_content)
-        if rating_match:
-            try:
-                value = float(rating_match.group(1))
-                if 0 < value <= 5:
-                    rating = value
-                    self.logger.parse_result("rating", rating)
-            except ValueError:
-                pass
-
-        # 리뷰 수 추출: "(3.2만명)", "(500명)", "(3만명)" 패턴
-        review_match = re.search(r"\(([\d.]+)만명\)", text_content)
-        if review_match:
-            try:
-                review_count = int(float(review_match.group(1)) * 10000)
-                self.logger.parse_result("review_count", review_count)
-            except ValueError:
-                pass
-        else:
-            # "만" 없이 "(500명)" 패턴
-            review_match = re.search(r"\(([\d,]+)명\)", text_content)
-            if review_match:
-                try:
-                    review_count = int(review_match.group(1).replace(",", ""))
-                    self.logger.parse_result("review_count", review_count)
-                except ValueError:
-                    pass
-
-        self.logger.rating_complete(rating, review_count, method="html", rating_scale=self.rating_scale)
-        return rating, review_count
+        node = book_node(soup, getattr(self, "_selected_title", ""))
+        if node is None:
+            self.failure_status = "parse_error"
+            return None, 0
+        if not self.verify_detail(soup, str(node.get("name", "")), getattr(self, "_selected_title", None)):
+            return None, 0
+        aggregate = node.get("aggregateRating", {})
+        self.rating_count = count_number(aggregate.get("ratingCount"))
+        self.text_review_count = count_number(aggregate.get("reviewCount"))
+        rating = valid_rating(aggregate.get("ratingValue"), 5, aggregate.get("bestRating"))
+        return rating, self.rating_count if self.rating_count is not None else self.text_review_count or 0

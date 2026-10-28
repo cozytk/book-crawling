@@ -73,8 +73,8 @@ class TestYes24GetRating:
         """대체 셀렉터로 평점 추출"""
         html = """
         <html>
-        <span class="yes_b">9.2</span>
-        <div>회원리뷰(50건)</div>
+        <span class="gd_rating"><span class="yes_b">9.2</span></span>
+        <div class="gd_reviewArea">회원리뷰(50건)</div>
         </html>
         """
         crawler = Yes24Crawler()
@@ -91,7 +91,7 @@ class TestYes24GetRating:
         html = """
         <html>
         <span class="gd_rating"><em>9.0</em></span>
-        <div>회원리뷰(1,234건)</div>
+        <div class="gd_reviewArea">회원리뷰(1,234건)</div>
         </html>
         """
         crawler = Yes24Crawler()
@@ -154,7 +154,7 @@ class TestYes24ReviewPatterns:
         html = """
         <html>
         <span class="gd_rating"><em>9.0</em></span>
-        <div>구매평(200)</div>
+        <div class="gd_reviewArea">구매평(200)</div>
         </html>
         """
         crawler = Yes24Crawler()
@@ -170,7 +170,7 @@ class TestYes24ReviewPatterns:
         html = """
         <html>
         <span class="gd_rating"><em>9.0</em></span>
-        <div>리뷰 300건</div>
+        <div class="gd_reviewArea">리뷰 300건</div>
         </html>
         """
         crawler = Yes24Crawler()

@@ -16,6 +16,7 @@ from crawler_logging import CrawlerLogger
 from crawlers.aladin import AladinCrawler
 from crawlers.isbn_lookup import ISBNLookup
 from crawlers.utils import is_isbn, clean_isbn
+from crawlers.transport import run_parser
 
 logger = CrawlerLogger("foreign_resolver")
 
@@ -30,6 +31,7 @@ class ForeignQuery:
     """
     query: str | None = None
     isbn: str | None = None
+    author: str | None = None
 
     @property
     def available(self) -> bool:
@@ -51,7 +53,8 @@ async def _get_original_info(query: str) -> dict | None:
 
 async def resolve_foreign_query(korean_query: str) -> ForeignQuery:
     # Providers use blocking HTTP. Isolate them from the ASGI event loop.
-    return await asyncio.to_thread(lambda: asyncio.run(_resolve_foreign_query(korean_query)))
+    result, _ = await run_parser(lambda: asyncio.run(_resolve_foreign_query(korean_query)))
+    return result
 
 
 async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
@@ -70,10 +73,11 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
     if not _is_korean(korean_query):
         # 영문 검색어도 ISBN을 찾아두면 해외 플랫폼(특히 LibraryThing) 정확도가 올라감
         lookup = ISBNLookup()
-        isbn = lookup.get_isbn(korean_query)
+        candidate = lookup.search(korean_query)
+        isbn = candidate.isbn if candidate else None
         if isbn:
             logger.debug(f"영문 검색어 ISBN 연결: {korean_query} → {isbn}")
-        return ForeignQuery(query=korean_query, isbn=isbn)
+        return ForeignQuery(query=korean_query, isbn=isbn, author=", ".join(candidate.authors) if candidate else None)
 
     info = await _get_original_info(korean_query)
     if not info:
@@ -86,12 +90,13 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
 
     if original_title:
         # 알라딘에 원서 제목 있음 → 원서 제목으로 ISBN 조회
-        foreign_isbn = lookup.get_isbn(original_title, original_author)
+        candidate = lookup.search(original_title, original_author)
+        foreign_isbn = candidate.isbn if candidate else None
         if foreign_isbn:
             logger.debug(f"원서 연결: {original_title} → ISBN {foreign_isbn}")
         else:
             logger.debug(f"원서 연결 (ISBN 없음): {original_title}")
-        return ForeignQuery(query=original_title, isbn=foreign_isbn)
+        return ForeignQuery(query=original_title, isbn=foreign_isbn, author=", ".join(candidate.authors) if candidate else original_author)
 
     if isbn13:
         # 원서 제목 없음 → 외부 API에서 원서 정보 조회
@@ -104,6 +109,6 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
                 logger.debug(f"원서 연결: {query} → ISBN {isbn}")
             else:
                 logger.debug(f"원서 연결 (ISBN 없음): {query}")
-            return ForeignQuery(query=query, isbn=isbn)
+            return ForeignQuery(query=query, isbn=isbn, author=", ".join(authors))
 
     return ForeignQuery()

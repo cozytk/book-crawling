@@ -14,6 +14,8 @@ dependencies = [
     "supabase>=2.27.3",
     "google-genai>=0.1.0",
     "python-dotenv",
+    "vercel>=0.6",
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]

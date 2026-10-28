@@ -1,3 +1,4 @@
+from crawlers.transport import fetch_sync
 """알라딘 API 기반 크롤러"""
 
 import html
@@ -43,6 +44,9 @@ class AladinCrawler(BaseHttpCrawler):
 
         start = time.perf_counter()
         try:
+            shared = fetch_sync(url, {"User-Agent": self.user_agent})
+            if shared is not None:
+                return json.loads(shared.text)
             opener = urllib.request.build_opener()
             opener.addheaders = [("User-Agent", self.user_agent)]
             response = opener.open(url, timeout=10)
@@ -255,6 +259,7 @@ class AladinCrawler(BaseHttpCrawler):
         params = {
             "itemIdType": "ItemId",
             "ItemId": item_id,
+            "OptResult": "ratingInfo",
         }
 
         result = self._api_request("ItemLookUp.aspx", params)
@@ -327,7 +332,12 @@ class AladinCrawler(BaseHttpCrawler):
 
         rating = rating_info.get("ratingScore")
         # ratingCount: 별점 참여자 수 (commentReviewCount는 100자평 개수)
-        review_count = rating_info.get("ratingCount", 0)
+        from .utils import count_number
+        self.rating_count = count_number(rating_info.get("ratingCount"))
+        self.text_review_count = count_number(rating_info.get("commentReviewCount"))
+        review_count = self.rating_count or 0
+        self.book_isbn = item.get("isbn13") or item.get("isbn")
+        self.book_author = item.get("author")
 
         # API에서 ratingInfo가 없는 경우 customerReviewRank 사용
         if rating is None:
@@ -345,6 +355,7 @@ class AladinCrawler(BaseHttpCrawler):
         API 기반이므로 별도의 delay 불필요
         """
         self._current_attempt = attempt
+        self.reset_result()
         start = time.perf_counter()
         try:
             book_url, book_title = await self.search_book(query)
@@ -374,14 +385,7 @@ class AladinCrawler(BaseHttpCrawler):
                 attempt=attempt,
             )
 
-            return PlatformRating(
-                platform=self.name,
-                rating=rating,
-                rating_scale=self.rating_scale,
-                review_count=review_count,
-                url=book_url,
-                book_title=book_title,
-            )
+            return self.result_record(query, book_url, book_title, rating, review_count)
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start) * 1000
             self.logger.error("crawl_failed", str(e), {"query": query})

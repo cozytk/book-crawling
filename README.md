@@ -1,4 +1,4 @@
-# Book Crawler
+# 갈피 · Book Crawler
 
 책 제목으로 알라딘·교보문고·Yes24·사락·왓챠·Goodreads·Amazon·LibraryThing의 평점과 평가 수를 비교합니다. 각 사이트가 고른 판본과 집계 방식이 다르므로, 카드의 제목과 원문 링크를 함께 확인하세요. 평균은 수집된 플랫폼의 10점 환산 평점을 단순 평균한 값입니다. ‘리뷰 수’에는 사이트에 따라 별점 참여자 수가 포함됩니다.
 
@@ -48,6 +48,30 @@ npm audit
 
 사이트 차단이나 원서 정보 부족으로 결과가 누락될 수 있습니다. 누락 플랫폼은 검색 완료 화면에 표시합니다. 모든 플랫폼의 수집을 보장하지 않습니다.
 
-## 2026-10-27 복구 상태
+## Vercel 배포
 
-코드, 로컬 실행, SQLite 기록 저장을 복구했습니다. 기존 Vercel 팀 접근도 복구했습니다. 외부 배포는 GCP 결제 계정 종료와 Supabase DNS 조회 실패로 복구가 남아 있습니다. 새 Supabase 무료 DB 생성은 약관 동의가 필요해 보류 중입니다. 세부 검증과 제한은 [복구 보고서](docs/recovery-20261027.md)를 참고하세요.
+웹과 Python API를 Vercel의 별도 프로젝트로 실행하고, 검색 기록은 비공개 Vercel Blob에 저장합니다. 운영에 GCP·Supabase가 필요하지 않습니다. 기존 외부 자원과 과거 DB 데이터는 변경하거나 자동 이전하지 않습니다.
+
+- 웹: `book-crawling`, 루트 `web/`, 서울 `icn1`.
+- API: `book-crawling-api`, `scripts/prepare-vercel-api.py`로 `.deploy/api/`에 생성, 서울 `icn1`.
+- 저장소: API에 연결한 비공개 Blob. UUID별 불변 기록과 검색어별 24시간 캐시를 분리합니다. 기록 화면은 최근 500개를 표시합니다. 읽을 책 목록은 기존처럼 브라우저에 보관합니다.
+- 브라우저는 같은 출처의 `/api/*`를 호출합니다. Next.js가 서버 전용 `API_SERVICE_TOKEN`으로 API에 연결하며, API 주소·키를 클라이언트 번들에 넣지 않습니다. 기존 웹 `ACCESS_TOKEN` 인증을 유지합니다.
+
+웹 환경 변수: `API_BACKEND_URL`, `API_SERVICE_TOKEN`, 기존 `ACCESS_TOKEN`.
+API 환경 변수: `API_SERVICE_TOKEN`, 연결된 Blob 자격 증명, `ALADIN_TTB_KEY` 및 선택적인 Google Books/AI 키. **운영 API에 `BOOK_CRAWLER_DB`나 Supabase 변수를 설정하지 않습니다.**
+
+```sh
+python3 scripts/prepare-vercel-api.py
+vercel project inspect --cwd .deploy/api --scope cozytks-projects
+vercel deploy --prod --cwd .deploy/api --scope cozytks-projects
+vercel project inspect --scope cozytks-projects
+vercel deploy --prod --skip-domain --scope cozytks-projects
+# 생성된 웹 배포를 검증한 뒤:
+vercel promote <검증한-웹-배포-URL> --scope cozytks-projects
+```
+
+최초 준비 시 API 프로젝트를 생성하고 `.deploy/api/`에 명시적으로 연결합니다. 비공개 Blob을 API 프로젝트에 연결하고, 두 프로젝트에 같은 API 서비스 토큰을 Secret으로 설정하세요. 로그인은 원래 `cozytk` 팀을 사용할 수 있는 계정이어야 합니다. 키나 `.env`를 저장소에 추가하지 않습니다.
+
+API는 HTTP 크롤러만 패키징하므로 Playwright 브라우저·pandas·Docker가 필요하지 않습니다. 사이트별 조회는 동시 실행하고, 플랫폼 조회 18초·원서 해석 12초·선택적 AI 소개 20초의 제한을 둡니다. 차단되거나 일치하는 책이 없는 사이트는 결과를 대체하지 않고 누락 상태로 표시합니다.
+
+검증 결과와 저장소 선택의 제한은 [Vercel 전환 보고서](docs/vercel-migration-20261028.md), 이전 복구 과정은 [복구 보고서](docs/recovery-20261027.md)를 참고하세요.

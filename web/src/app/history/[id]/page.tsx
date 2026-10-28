@@ -3,10 +3,12 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { getSearch, searchBook, SearchResult, PLATFORM_META } from "@/lib/api";
+import { getSearch, searchBook, SearchResult } from "@/lib/api";
 import BookmarkButton from "@/components/BookmarkButton";
+import RatingGrid from "@/components/RatingGrid";
 
 const compareNormalizedDesc = (a: SearchResult["ratings"][number], b: SearchResult["ratings"][number]) => {
+  if (a.normalized_rating === null && b.normalized_rating === null) return 0;
   if (a.normalized_rating === null) return 1;
   if (b.normalized_rating === null) return -1;
   return b.normalized_rating - a.normalized_rating;
@@ -43,7 +45,7 @@ export default function HistoryDetailPage() {
     try {
       const refreshed = await searchBook(
         result.search.query,
-        undefined,
+        result.search.requested_platforms ?? result.ratings.map((rating) => rating.platform),
         { force_refresh: true }
       );
       if (refreshed.search.id) {
@@ -56,7 +58,7 @@ export default function HistoryDetailPage() {
     } finally {
       setIsUpdating(false);
     }
-  }, [loadDetail, result?.search.query, router]);
+  }, [loadDetail, result, router]);
 
   useEffect(() => {
     loadDetail();
@@ -64,9 +66,9 @@ export default function HistoryDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">검색 히스토리 상세</h1>
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap gap-3 items-center justify-between">
+        <h1 className="text-2xl font-bold">검색 결과 상세</h1>
+        <div className="flex flex-wrap items-center gap-3">
           {result && result.search.id && (
             <BookmarkButton
               searchId={result.search.id}
@@ -87,7 +89,7 @@ export default function HistoryDetailPage() {
             href="/history"
             className="text-sm text-blue-600 hover:text-blue-800"
           >
-            ← 히스토리로 돌아가기
+            ← 기록로 돌아가기
           </Link>
         </div>
       </div>
@@ -104,6 +106,7 @@ export default function HistoryDetailPage() {
 
       {!isLoading && result && (
         <>
+          {result.search.legacy_validation && <p className="notice">이전 수집 규칙으로 저장한 결과입니다. 결과 업데이트를 누르면 현재 기준으로 다시 확인합니다.</p>}
           <div className="bg-white rounded-xl border border-gray-200 p-5">
             <h2 className="text-xl font-semibold">{result.search.query}</h2>
             <p className="text-xs text-gray-400 mt-1">
@@ -118,13 +121,13 @@ export default function HistoryDetailPage() {
                 <p className="text-xl font-bold">
                   {result.search.avg_rating !== null
                     ? `${result.search.avg_rating.toFixed(2)} / 10`
-                    : "N/A"}
+                    : "평점 없음"}
                 </p>
               </div>
               <div>
-                <span className="text-gray-500">리뷰 수</span>
+                <span className="text-gray-500">평가 수</span>
                 <p className="text-xl font-bold">
-                  {result.search.total_reviews.toLocaleString()}개
+                  {result.search.total_reviews == null ? "미확인" : `${result.search.total_reviews.toLocaleString()}개`}
                 </p>
               </div>
               <div>
@@ -134,51 +137,7 @@ export default function HistoryDetailPage() {
             </div>
           </div>
 
-          <div className="space-y-3">
-            {[...result.ratings]
-              .sort(compareNormalizedDesc)
-              .map((rating) => {
-                const meta = PLATFORM_META[rating.platform] || {
-                  label: rating.platform,
-                  color: "#666",
-                };
-                return (
-                  <div
-                    key={rating.platform}
-                    className="bg-white rounded-xl border border-gray-200 p-5"
-                  >
-                    <div className="flex items-center justify-between mb-3">
-                      <span
-                        className="text-sm font-semibold px-2.5 py-1 rounded-full text-white"
-                        style={{ backgroundColor: meta.color }}
-                      >
-                        {meta.label}
-                      </span>
-                      <span className="text-2xl font-bold tabular-nums">
-                        {rating.normalized_rating !== null
-                          ? rating.normalized_rating.toFixed(1)
-                          : "N/A"}
-                        <span className="text-sm font-normal text-gray-400">/10</span>
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-700 mb-1">
-                      {rating.book_title || "-"}
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      {rating.review_count.toLocaleString()}개 리뷰
-                    </p>
-                    <a
-                      href={rating.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-3 inline-block text-xs text-blue-600 hover:text-blue-800"
-                    >
-                      상세 페이지 보기
-                    </a>
-                  </div>
-                );
-              })}
-          </div>
+          <RatingGrid ratings={[...result.ratings].sort(compareNormalizedDesc)} />
         </>
       )}
     </div>

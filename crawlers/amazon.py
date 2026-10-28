@@ -1,3 +1,4 @@
+from crawlers.transport import fetch_sync
 """Amazon Books HTTP 기반 크롤러"""
 
 import json
@@ -8,7 +9,7 @@ import urllib.request
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import is_isbn, title_score
+from .utils import is_isbn, title_score, book_node, valid_rating, count_number, isbn13
 
 
 class AmazonCrawler(BaseHttpCrawler):
@@ -36,6 +37,9 @@ class AmazonCrawler(BaseHttpCrawler):
         """
         Amazon 페이지 가져오기 (브라우저와 유사한 헤더 포함)
         """
+        response = fetch_sync(url, {"User-Agent": self.user_agent, "Accept-Language": "en-US,en;q=0.9"})
+        if response is not None:
+            return response.text
         req = urllib.request.Request(url)
         headers = {
             "User-Agent": self.user_agent,
@@ -97,6 +101,12 @@ class AmazonCrawler(BaseHttpCrawler):
         https://www.amazon.com/dp/{ASIN} 형식으로 직접 접근.
         """
         clean = identifier.replace("-", "").replace(" ", "")
+        if len(clean) == 13:
+            if not clean.startswith("978"):
+                return self.search_by_keyword(identifier)
+            core = clean[3:12]
+            check = (11 - sum((10 - i) * int(n) for i, n in enumerate(core)) % 11) % 11
+            clean = core + ("X" if check == 10 else str(check))
         url = f"https://www.amazon.com/dp/{clean}"
 
         try:
@@ -105,7 +115,12 @@ class AmazonCrawler(BaseHttpCrawler):
             return None, ""
 
         title, rating, review_count = self._parse_detail_page(html)
-        if title:
+        if title and self.verify_detail(BeautifulSoup(html, "html.parser"), title, identifier, allow_product=True):
+            if not is_isbn(identifier):
+                product = BeautifulSoup(html, "html.parser").select_one('input#ASIN, input[name="ASIN"]')
+                if not product or product.get("value", "").upper() != clean.upper():
+                    return None, ""
+            self._rating_loaded = True
             self._cached_rating = rating
             self._cached_review_count = review_count
             return url, title
@@ -145,7 +160,20 @@ class AmazonCrawler(BaseHttpCrawler):
                 continue
 
             title = title_elem.get_text(strip=True)
-            if not title_score(keyword, title):
+            if is_isbn(keyword):
+                if not (asin.isdigit() and isbn13(asin) == isbn13(keyword)):
+                    if str(keyword).startswith("979"):
+                        try:
+                            detail_html = self._fetch_with_headers(f"https://www.amazon.com/dp/{asin}")
+                            detail_title, detail_rating, detail_count = self._parse_detail_page(detail_html)
+                            if self.verify_detail(BeautifulSoup(detail_html, "html.parser"), detail_title, keyword, allow_product=True):
+                                self._cached_rating, self._cached_review_count = detail_rating, detail_count
+                                self._rating_loaded = True
+                                return f"https://www.amazon.com/dp/{asin}", detail_title
+                        except Exception:
+                            pass
+                    continue
+            elif not title_score(keyword, title):
                 continue
             book_url = f"https://www.amazon.com/dp/{asin}"
 
@@ -155,9 +183,9 @@ class AmazonCrawler(BaseHttpCrawler):
                 aria = rating_elem.get("aria-label", "")
                 match = re.search(r"([\d.]+)\s*out of\s*5", aria)
                 if match:
-                    self._cached_rating = float(match.group(1))
+                    self._cached_rating = valid_rating(match.group(1), 5)
 
-            review_elem = result.select_one('span[aria-label*="rating"]')
+            review_elem = result.select_one('a[href*="product-reviews"] span, a[href*="customerReviews"] span')
             if not review_elem:
                 review_elem = result.select_one('a[href*="customerReviews"] span')
             if review_elem:
@@ -165,7 +193,12 @@ class AmazonCrawler(BaseHttpCrawler):
                 match = re.search(r"([\d,]+)", text)
                 if match:
                     self._cached_review_count = int(match.group(1).replace(",", ""))
+                    self.rating_count = self._cached_review_count
 
+            if self._expected_author:
+                self._cached_rating = None  # Fetch detail to verify the known author.
+            self._rating_loaded = self._cached_rating is not None
+            self._selected_title = title
             return book_url, title
 
         # 방법 2: 일반 링크에서 /dp/ 패턴 찾기
@@ -200,50 +233,21 @@ class AmazonCrawler(BaseHttpCrawler):
         rating = None
         review_count = 0
 
-        # 방법 1: JSON-LD에서 추출
-        for script in soup.find_all("script", type="application/ld+json"):
-            try:
-                data = json.loads(script.string)
-                if isinstance(data, dict) and "aggregateRating" in data:
-                    ar = data["aggregateRating"]
-                    rating = float(ar.get("ratingValue", 0))
-                    review_count = int(ar.get("ratingCount", ar.get("reviewCount", 0)))
-                    return title, rating, review_count
-            except (json.JSONDecodeError, ValueError, TypeError):
-                continue
-
-        # 방법 2: HTML에서 직접 추출
-        # 평점: "4.7 out of 5 stars" 형식
-        # 우선순위: 집계 평점 셀렉터 먼저 (개별 리뷰 평점 제외)
-        rating_elem = soup.select_one('#acrPopover span.a-icon-alt')
-        if not rating_elem:
-            rating_elem = soup.select_one('#averageCustomerReviews .a-icon-alt')
-        if not rating_elem:
-            rating_elem = soup.select_one('span[data-asin] .a-icon-alt')
-        if not rating_elem:
-            # 마지막 폴백 - 첫 번째 rating 요소 사용
-            rating_elem = soup.select_one('span.a-icon-alt')
-
-        if rating_elem:
-            text = rating_elem.get_text(strip=True)
-            match = re.search(r"([\d.]+)\s*out of\s*5", text)
-            if match:
-                rating = float(match.group(1))
-
-        # 리뷰 수: "5,123 ratings" 또는 "5,123 global ratings" 형식
-        review_elem = soup.select_one('#acrCustomerReviewText')
-        if not review_elem:
-            review_elem = soup.select_one('span[data-hook="total-review-count"]')
-        if not review_elem:
-            review_elem = soup.select_one('#averageCustomerReviews span:-soup-contains("ratings")')
-
-        if review_elem:
-            text = review_elem.get_text(strip=True)
-            match = re.search(r"([\d,]+)", text)
-            if match:
-                review_count = int(match.group(1).replace(",", ""))
-
-        return title, rating, review_count
+        node = book_node(soup, title, allow_product=True) or {}
+        aggregate = node.get("aggregateRating", {})
+        rating = valid_rating(aggregate.get("ratingValue"), 5, aggregate.get("bestRating"))
+        self.rating_count = count_number(aggregate.get("ratingCount"))
+        self.text_review_count = count_number(aggregate.get("reviewCount"))
+        element = soup.select_one('#acrPopover .a-icon-alt, #averageCustomerReviews .a-icon-alt, #averageCustomerReviews_feature_div .a-icon-alt')
+        if rating is None and element:
+            match = re.search(r"([\d.]+)\s*out of\s*5", element.get_text())
+            rating = valid_rating(match.group(1), 5) if match else None
+        element = soup.select_one('#acrCustomerReviewText, #averageCustomerReviews [data-hook="total-review-count"]')
+        if element:
+            match = re.search(r"([\d,]+)", element.get_text())
+            if match and self.rating_count is None:
+                self.rating_count = count_number(match.group(1))
+        return title, rating, self.rating_count if self.rating_count is not None else self.text_review_count or 0
 
     async def get_rating(self, url: str) -> tuple[float | None, int]:
         """
@@ -252,7 +256,7 @@ class AmazonCrawler(BaseHttpCrawler):
         search_book에서 이미 추출했으면 캐시 반환.
         """
         # 캐시된 값이 있으면 반환
-        if self._cached_rating is not None:
+        if self._rating_loaded or self._cached_rating is not None:
             self.logger.debug("캐시된 평점 사용", rating=self._cached_rating)
             self.logger.rating_complete(
                 self._cached_rating, self._cached_review_count, method="json-ld",
@@ -267,6 +271,10 @@ class AmazonCrawler(BaseHttpCrawler):
             self.logger.rating_complete(None, 0, method="json-ld", rating_scale=self.rating_scale)
             return None, 0
 
-        _, rating, review_count = self._parse_detail_page(html)
+        title, rating, review_count = self._parse_detail_page(html)
+        expected = self._expected_title or getattr(self, "_selected_title", None)
+        if not self.verify_detail(BeautifulSoup(html, "html.parser"), title, expected, allow_product=True):
+            return None, 0
+        self._rating_loaded = True
         self.logger.rating_complete(rating, review_count, method="json-ld", rating_scale=self.rating_scale)
         return rating, review_count

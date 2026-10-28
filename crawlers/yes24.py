@@ -1,10 +1,11 @@
 import re
+from crawlers.transport import active_transport
 import urllib.parse
 
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import title_score, is_isbn, clean_isbn
+from .utils import title_score, is_isbn, clean_isbn, structured_isbns, isbn_matches, count_number
 
 
 class Yes24Crawler(BaseHttpCrawler):
@@ -19,11 +20,21 @@ class Yes24Crawler(BaseHttpCrawler):
         encoded_query = urllib.parse.quote(keyword)
         search_url = f"https://www.yes24.com/Product/Search?domain=ALL&query={encoded_query}"
 
-        try:
-            html = self._fetch_html(search_url)
-        except Exception:
-            return None, ""
+        def identify():
+            try:
+                html = self._fetch_html(search_url)
+            except Exception:
+                return None, "", None, None
+            url, title = self._select_product(keyword, html)
+            return url, title, self.book_isbn, self.book_author
+        transport = active_transport()
+        result = transport.memo(("yes24-product", keyword), identify) if transport else identify()
+        url, title, self.book_isbn, self.book_author = result
+        self._selected_title = title or None
+        self._selected_product = re.search(r"/goods/(\d+)", url or "", re.I).group(1) if url else None
+        return url, title
 
+    def _select_product(self, keyword, html):
         soup = BeautifulSoup(html, "html.parser")
 
         # a.gd_name 클래스로 검색 결과 링크 찾기
@@ -45,12 +56,23 @@ class Yes24Crawler(BaseHttpCrawler):
                 continue
 
             score = title_score(keyword, text)
+            identifiers = structured_isbns(link.parent)
+            # Current Yes24 binds ISBN and goods number in this named hook.
+            # Parse its typed arguments only; arbitrary page text is not proof.
+            click = re.search(r"setGoodsClickExtraCodeHub\(\s*['\"]\d+['\"]\s*,\s*['\"]([0-9Xx -]+)['\"]\s*,\s*['\"](\d+)['\"]", link.get("onclick", ""))
+            product = re.search(r"/goods/(\d+)", href, re.I)
+            if click and product and click.group(2) == product.group(1):
+                identifiers.append(click.group(1))
             if is_isbn(keyword):
-                score = 1.0 if clean_isbn(keyword) in re.sub(r"[\s-]", "", str(link.parent)) else 0.0
+                score = 1.0 if isbn_matches(keyword, identifiers) else 0.0
             if score > best_score:
                 best_score = score
                 best_url = href
                 best_title = text
+                container = link.find_parent("li") or link.parent
+                self.book_isbn = next(iter(identifiers), None)
+                author = container.select_one(".info_auth, .authPub .auth, .gd_auth")
+                self.book_author = author.get_text(" ", strip=True) if author else None
 
         if not best_url:
             return None, ""
@@ -72,10 +94,19 @@ class Yes24Crawler(BaseHttpCrawler):
         soup = BeautifulSoup(html, "html.parser")
 
         # 평점 추출 (Yes24는 10점 만점)
+        actual = soup.select_one(".gd_titArea .gd_name, h2.gd_name")
+        if actual and self._selected_title and not title_score(self._selected_title, actual.get_text(strip=True)):
+            self.failure_status = "identity_mismatch"
+            return None, 0
+        final = getattr(self, "_last_url", "")
+        selected_product = getattr(self, "_selected_product", None)
+        if final and selected_product and not re.search(rf"/goods/{selected_product}(?:[/?#]|$)", final, re.I):
+            self.failure_status = "identity_mismatch"
+            return None, 0
         rating = None
         rating_selectors = [
             ".gd_rating em",
-            ".yes_b",
+            ".gd_rating .yes_b",
             "span.gd_rating em",
         ]
 
@@ -95,7 +126,17 @@ class Yes24Crawler(BaseHttpCrawler):
 
         # 리뷰 수 추출 - "회원리뷰(N건)" 패턴에서 추출
         review_count = 0
-        text = soup.get_text()
+        counter = soup.select_one("#scroll_bar_count[data-review-count], #emReviewCountText")
+        if counter:
+            raw_count = counter.get("data-review-count")
+            if raw_count is None:
+                match = re.search(r"[\d,]+", counter.get_text())
+                raw_count = match.group() if match else None
+            self.text_review_count = count_number(raw_count)
+            if self.text_review_count is not None:
+                review_count = self.text_review_count
+        areas = soup.select(".gd_reviewArea, .gd_infoTop, #spanGdReview, #infoset_reivew .tit_txt")
+        text = " ".join(area.get_text(" ", strip=True) for area in areas)
 
         patterns = [
             r"회원리뷰\s*\(\s*(\d[\d,]*)\s*건?\s*\)",
@@ -104,9 +145,12 @@ class Yes24Crawler(BaseHttpCrawler):
         ]
 
         for pattern in patterns:
+            if self.text_review_count is not None:
+                break
             match = re.search(pattern, text)
             if match:
                 review_count = int(match.group(1).replace(",", ""))
+                self.text_review_count = review_count
                 self.logger.parse_result(pattern, review_count)
                 break
 

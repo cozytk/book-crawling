@@ -7,7 +7,7 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import title_score
+from .utils import title_score, is_isbn, clean_isbn, structured_isbns, isbn_matches, count_number
 
 
 class SarakCrawler(BaseHttpCrawler):
@@ -45,51 +45,15 @@ class SarakCrawler(BaseHttpCrawler):
         1. Yes24 검색으로 상품 ID 획득
         2. 사락 URL 구성: /reading-note/book/{product_id}
         """
-        encoded_query = urllib.parse.quote(keyword)
-        search_url = f"{self.yes24_url}/Product/Search?domain=ALL&query={encoded_query}"
-
-        try:
-            html = self._fetch_html(search_url)
-        except Exception:
+        from .yes24 import Yes24Crawler
+        identifier = Yes24Crawler()
+        identifier._fetch_html = self._fetch_html
+        url, title = identifier.search_by_keyword(keyword)
+        product_id = self._extract_product_id(url or "")
+        if not product_id:
             return None, ""
-
-        soup = BeautifulSoup(html, "html.parser")
-
-        # Yes24 검색 결과에서 첫 번째 책 찾기
-        keyword_lower = keyword.lower()
-        best_product_id = None
-        best_title = ""
-        best_score = 0.0
-
-        for link in soup.select("a.gd_name"):
-            href = link.get("href", "")
-            text = link.get_text(strip=True)
-
-            # 중고서점 제외
-            if "UsedShopHub" in href:
-                continue
-
-            # /product/goods/ 형식만 허용
-            if "/product/goods/" not in href.lower():
-                continue
-
-            product_id = self._extract_product_id(href)
-            if not product_id:
-                continue
-
-            # 첫 번째 유효한 결과 저장
-            score = title_score(keyword, text)
-            if score > best_score:
-                best_score = score
-                best_product_id = product_id
-                best_title = text
-
-        if not best_product_id:
-            return None, ""
-
-        # 사락 URL 구성
-        sarak_url = f"{self.base_url}/reading-note/book/{best_product_id}"
-        return sarak_url, best_title
+        self.book_isbn, self.book_author = identifier.book_isbn, identifier.book_author
+        return f"{self.base_url}/reading-note/book/{product_id}", title
 
     def _extract_goods_no(self, url: str) -> str | None:
         """사락 URL에서 상품 번호 추출"""
@@ -118,7 +82,8 @@ class SarakCrawler(BaseHttpCrawler):
             self.logger.api_response("book-statistics-summary", data)
 
             rating = data.get("starPointAverageForBookInfo")
-            review_count = data.get("userWhoDidVoteThisBookCount", 0)
+            self.rating_count = count_number(data.get("userWhoDidVoteThisBookCount"))
+            review_count = self.rating_count or 0
 
             # 유효성 검사
             if rating is not None and (rating <= 0 or rating > 10):

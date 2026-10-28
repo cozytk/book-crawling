@@ -1,13 +1,19 @@
 import { SSEParser } from "./sse";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = "";
 
 export interface PlatformRating {
   platform: string;
   rating: number | null;
   rating_scale: number;
   normalized_rating: number | null;
-  review_count: number;
+  review_count: number | null;
+  rating_count?: number | null;
+  text_review_count?: number | null;
+  isbn?: string | null;
+  author?: string | null;
+  edition_note?: string | null;
+  comparison_scope?: "work" | "edition";
   book_title: string;
   url: string;
   crawled_at: string;
@@ -19,10 +25,14 @@ export interface SearchResult {
     id: string | null;
     query: string;
     avg_rating: number | null;
-    total_reviews: number;
+    total_reviews: number | null;
+    counts_complete?: boolean;
+    legacy_validation?: boolean;
     platform_count: number;
     missing_platforms?: string[];
     created_at?: string;
+    storage_saved?: boolean;
+    requested_platforms?: string[];
   };
   ratings: PlatformRating[];
 }
@@ -30,6 +40,12 @@ export interface SearchResult {
 export interface PlatformInfo {
   name: string;
   type: "domestic" | "foreign";
+}
+
+export interface PlatformStatus {
+  platform: string;
+  status: "done" | "unavailable" | "timeout" | "blocked" | "not_found" | "identity_mismatch" | "parse_error" | "network_error";
+  reason?: string;
 }
 
 export async function searchBook(
@@ -98,11 +114,14 @@ export async function searchBookStream(
   onError: (error: string) => void,
   onDescription?: (description: string) => void,
   platforms?: string[],
-  forceRefresh?: boolean
+  forceRefresh?: boolean,
+  signal?: AbortSignal,
+  onStatus?: (status: PlatformStatus) => void
 ): Promise<void> {
   const res = await fetch(`${API_URL}/api/search/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal,
     body: JSON.stringify({
       query,
       platforms: platforms || null,
@@ -132,6 +151,8 @@ export async function searchBookStream(
       onError(parsed.message || "검색 중 오류가 발생했습니다");
     } else if (event === "description_chunk") {
       onDescription?.(parsed.chunk);
+    } else if (event === "platform_status") {
+      onStatus?.(parsed as PlatformStatus);
     } else if (event === "rating" || event === "message") {
       onResult(parsed as PlatformRating);
     }
@@ -155,7 +176,7 @@ export interface SearchHistoryItem {
   id: string;
   query: string;
   avg_rating: number | null;
-  total_reviews: number;
+  total_reviews: number | null;
   platform_count: number;
   created_at: string;
   ratings: PlatformRating[];

@@ -13,13 +13,23 @@ class LocalStore:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.execute("CREATE TABLE IF NOT EXISTS searches (id TEXT PRIMARY KEY, query TEXT, created_at TEXT, payload TEXT)")
+            db.execute("CREATE TABLE IF NOT EXISTS source_cache (key TEXT PRIMARY KEY, payload TEXT)")
+
+    def platform_cached(self, query, platform):
+        with self.connect() as db:
+            row = db.execute("SELECT payload FROM source_cache WHERE key = ?", (f"{query.casefold()}:{platform}",)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def cache_platform(self, query, platform, value):
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO source_cache VALUES (?, ?)", (f"{query.casefold()}:{platform}", json.dumps(value)))
 
     def connect(self):
         return sqlite3.connect(self.path, timeout=10)
 
     def save(self, query, results, platforms=None):
         from api.db import summarize
-        search = {"id": str(uuid4()), "query": query, "created_at": datetime.now(timezone.utc).isoformat(), **summarize(results)}
+        search = {"schema_version": 3, "id": str(uuid4()), "query": query, "created_at": datetime.now(timezone.utc).isoformat(), **summarize(results)}
         if platforms is not None:
             search["requested_platforms"] = platforms
         payload = {"search": search, "ratings": results}

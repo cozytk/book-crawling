@@ -16,3 +16,4 @@ data/
 artifacts/
 web/.env.production
 web/*.tsbuildinfo
+.deploy/

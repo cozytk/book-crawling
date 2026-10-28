@@ -31,6 +31,15 @@ def test_yes24_and_sarak_do_not_take_unrelated_first_result(crawler_type):
         assert crawler.search_by_keyword("데미안") == (None, "")
 
 
+@pytest.mark.parametrize("crawler_type", [Yes24Crawler, SarakCrawler])
+def test_isbn_search_requires_matching_identifier(crawler_type):
+    crawler = crawler_type()
+    html = '<div data-isbn="9788937460449"><a class="gd_name" href="/product/goods/176787">데미안</a></div>'
+    with patch.object(crawler, "_fetch_html", return_value=html):
+        assert crawler.search_by_keyword("9788937460449")[1] == "데미안"
+        assert crawler.search_by_keyword("9780132350884") == (None, "")
+
+
 def test_kyobo_short_query_does_not_match_empty_word_list():
     crawler = KyoboCrawler()
     html = '<div class="prod_item"><a class="prod_info" href="/detail/S1">싯다르타</a></div>'

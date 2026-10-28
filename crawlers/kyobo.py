@@ -1,3 +1,4 @@
+from crawlers.transport import fetch_sync
 """교보문고 HTTP 기반 크롤러"""
 
 import json
@@ -8,7 +9,7 @@ import urllib.request
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import title_score, is_isbn, clean_isbn
+from .utils import title_score, is_isbn, clean_isbn, structured_isbns, isbn_matches
 
 
 class KyoboCrawler(BaseHttpCrawler):
@@ -78,13 +79,13 @@ class KyoboCrawler(BaseHttpCrawler):
                 continue
 
             # 세트/에디션 상품 제외
-            exclude_keywords = ["세트", "에디션", "3종", "2종", "전집", "박스세트"]
-            if any(kw in book_name for kw in exclude_keywords):
+            exclude_keywords = ["세트", "3종", "2종", "전집", "박스세트"]
+            if not is_isbn(keyword) and any(kw in book_name and kw not in keyword for kw in exclude_keywords):
                 continue
 
             score = title_score(keyword, book_name)
             if is_isbn(keyword):
-                score = 1.0 if clean_isbn(keyword) in re.sub(r"[\s-]", "", str(item)) else 0.0
+                score = 1.0 if isbn_matches(keyword, structured_isbns(item)) else 0.0
             if score > best_score:
                 best_score = score
                 best_title = book_name
@@ -97,6 +98,11 @@ class KyoboCrawler(BaseHttpCrawler):
                     self._search_rating = None
                 count = re.search(r"[\d,]+", count_elem.get_text()) if count_elem else None
                 self._search_review_count = int(count.group().replace(",", "")) if count else 0
+                # The list does not identify this count as voters vs written
+                # reviews. Preserve it as an observed count without relabeling.
+                self.count_observed = count is not None
+                self._rating_loaded = self._search_rating is not None
+                self.book_isbn = next(iter(structured_isbns(item)), None)
 
         return (best_url, best_title) if best_url else (None, "")
 
@@ -108,6 +114,9 @@ class KyoboCrawler(BaseHttpCrawler):
     def _fetch_api(self, url: str) -> dict | None:
         """API 호출 헬퍼"""
         try:
+            response = fetch_sync(url, {"User-Agent": self.user_agent})
+            if response is not None:
+                return json.loads(response.text)
             req = urllib.request.Request(url)
             req.add_header("User-Agent", self.user_agent)
             req.add_header("Referer", "https://product.kyobobook.co.kr/")

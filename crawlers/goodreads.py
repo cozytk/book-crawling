@@ -1,3 +1,4 @@
+from crawlers.transport import fetch_sync
 """Goodreads HTTP 기반 크롤러"""
 
 import json
@@ -8,7 +9,7 @@ import urllib.request
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import is_isbn, title_score
+from .utils import is_isbn, title_score, book_node, valid_rating, count_number
 
 
 class GoodreadsCrawler(BaseHttpCrawler):
@@ -29,7 +30,7 @@ class GoodreadsCrawler(BaseHttpCrawler):
         self._cached_rating: float | None = None
         self._cached_review_count: int = 0
 
-    def _fetch_with_redirect(self, url: str, retries: int = 2) -> tuple[str, str]:
+    def _fetch_with_redirect(self, url: str, retries: int = 0) -> tuple[str, str]:
         """
         URL에서 HTML 가져오기 (리다이렉트 추적, 재시도 지원)
 
@@ -40,6 +41,9 @@ class GoodreadsCrawler(BaseHttpCrawler):
         Returns:
             (html, final_url) - 최종 URL과 HTML 내용
         """
+        response = fetch_sync(url, {"User-Agent": self.user_agent})
+        if response is not None:
+            return response.text, response.url
         import time
 
         last_error = None
@@ -54,7 +58,7 @@ class GoodreadsCrawler(BaseHttpCrawler):
                 for k, v in headers.items():
                     req.add_header(k, v)
 
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                with urllib.request.urlopen(req, timeout=8) as resp:
                     final_url = resp.geturl()
                     content = resp.read()
                     try:
@@ -98,7 +102,8 @@ class GoodreadsCrawler(BaseHttpCrawler):
 
         # 상세 페이지에서 제목과 평점 추출
         title, rating, review_count = self._parse_detail_page(html)
-        if title:
+        if title and self.verify_detail(BeautifulSoup(html, "html.parser"), title, identifier):
+            self._rating_loaded = True
             self._cached_rating = rating
             self._cached_review_count = review_count
             return final_url, title
@@ -129,7 +134,8 @@ class GoodreadsCrawler(BaseHttpCrawler):
         # 검색 결과가 상세 페이지로 리다이렉트된 경우 (정확한 매칭)
         if "/book/show/" in final_url:
             book_title, rating, review_count = self._parse_detail_page(html)
-            if book_title and title_score(keyword, book_title):
+            if book_title and title_score(keyword, book_title) and self.verify_detail(BeautifulSoup(html, "html.parser"), book_title, keyword):
+                self._rating_loaded = True
                 self._cached_rating = rating
                 self._cached_review_count = review_count
                 return final_url, book_title
@@ -148,6 +154,7 @@ class GoodreadsCrawler(BaseHttpCrawler):
             if book_url and not book_url.startswith("http"):
                 book_url = f"https://www.goodreads.com{book_url}"
             book_title = book_link.get_text(strip=True)
+            self._selected_title = book_title
             return book_url, book_title
 
         return None, ""
@@ -172,38 +179,22 @@ class GoodreadsCrawler(BaseHttpCrawler):
             if title_elem:
                 title = title_elem.get_text(strip=True)
 
-        # JSON-LD에서 평점/리뷰 추출
-        rating = None
-        review_count = 0
-
-        for script in soup.find_all("script", type="application/ld+json"):
-            try:
-                data = json.loads(script.string)
-                if isinstance(data, dict) and "aggregateRating" in data:
-                    ar = data["aggregateRating"]
-                    rating = float(ar.get("ratingValue", 0))
-                    # ratingCount: 별점 참여자 수 (reviewCount는 리뷰 작성자 수)
-                    review_count = int(ar.get("ratingCount", 0))
-                    return title, rating, review_count
-            except (json.JSONDecodeError, ValueError, TypeError):
-                continue
-
-        # JSON-LD 실패 시 HTML에서 직접 추출
-        rating_elem = soup.select_one('div[class*="RatingStatistics"] span[class*="RatingStars"]')
-        if rating_elem:
-            aria_label = rating_elem.get("aria-label", "")
-            match = re.search(r"([\d.]+)\s*out of\s*5", aria_label)
-            if match:
-                rating = float(match.group(1))
-
-        review_elem = soup.select_one('span[data-testid="reviewsCount"]')
-        if review_elem:
-            text = review_elem.get_text(strip=True)
-            match = re.search(r"([\d,]+)", text)
-            if match:
-                review_count = int(match.group(1).replace(",", ""))
-
-        return title, rating, review_count
+        node = book_node(soup, title) or {}
+        aggregate = node.get("aggregateRating", {})
+        rating = valid_rating(aggregate.get("ratingValue"), 5, aggregate.get("bestRating"))
+        self.rating_count = count_number(aggregate.get("ratingCount"))
+        self.text_review_count = count_number(aggregate.get("reviewCount"))
+        if rating is None:
+            element = soup.select_one('div[class*="RatingStatistics"] span[class*="RatingStars"]')
+            if element:
+                match = re.search(r"([\d.]+)\s*out of\s*5", element.get("aria-label", ""))
+                rating = valid_rating(match.group(1), 5) if match else None
+        for selector, field in [('span[data-testid="ratingsCount"]', 'rating_count'), ('span[data-testid="reviewsCount"]', 'text_review_count')]:
+            element = soup.select_one(selector)
+            match = re.search(r"([\d,]+)", element.get_text()) if element else None
+            if match and getattr(self, field) is None:
+                setattr(self, field, count_number(match.group(1)))
+        return title, rating, self.rating_count if self.rating_count is not None else self.text_review_count or 0
 
     async def get_rating(self, url: str) -> tuple[float | None, int]:
         """
@@ -213,7 +204,7 @@ class GoodreadsCrawler(BaseHttpCrawler):
         아니면 상세 페이지 다시 접근.
         """
         # 캐시된 값이 있으면 반환
-        if self._cached_rating is not None:
+        if self._rating_loaded or self._cached_rating is not None:
             self.logger.debug("캐시된 평점 사용", rating=self._cached_rating)
             self.logger.rating_complete(
                 self._cached_rating, self._cached_review_count, method="json-ld",
@@ -228,6 +219,10 @@ class GoodreadsCrawler(BaseHttpCrawler):
             self.logger.rating_complete(None, 0, method="json-ld", rating_scale=self.rating_scale)
             return None, 0
 
-        _, rating, review_count = self._parse_detail_page(html)
+        title, rating, review_count = self._parse_detail_page(html)
+        expected = self._expected_title or getattr(self, "_selected_title", None)
+        if not self.verify_detail(BeautifulSoup(html, "html.parser"), title, expected):
+            return None, 0
+        self._rating_loaded = True
         self.logger.rating_complete(rating, review_count, method="json-ld", rating_scale=self.rating_scale)
         return rating, review_count

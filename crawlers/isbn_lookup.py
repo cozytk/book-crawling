@@ -1,3 +1,4 @@
+from crawlers.transport import fetch_sync
 """ISBN 조회 모듈 - 원서 제목으로 ISBN 검색
 
 확장 가능한 구조:
@@ -17,7 +18,7 @@ import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from .utils import title_score
+from .utils import title_score, author_matches
 
 
 @dataclass
@@ -100,6 +101,9 @@ class GoogleBooksProvider(ISBNProvider):
 
     def _api_get(self, url: str) -> dict | None:
         """Google Books API GET 요청"""
+        response = fetch_sync(url, {"User-Agent": "Mozilla/5.0"})
+        if response is not None:
+            return json.loads(response.text)
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "Mozilla/5.0")
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -151,6 +155,8 @@ class GoogleBooksProvider(ISBNProvider):
                     similarity = max(similarity, 0.8)
 
                 if not title_score(title, item_title):
+                    continue
+                if not author_matches(author, item_authors):
                     continue
 
                 isbn = self._extract_isbn(info.get("industryIdentifiers", []))
@@ -268,6 +274,9 @@ class OpenLibraryProvider(ISBNProvider):
 
     def _api_get(self, url: str) -> dict | None:
         """Open Library API GET 요청"""
+        response = fetch_sync(url, {"User-Agent": "Mozilla/5.0"})
+        if response is not None:
+            return json.loads(response.text)
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "BookCrawler/1.0")
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -290,6 +299,8 @@ class OpenLibraryProvider(ISBNProvider):
             # 첫 번째 결과에서 ISBN 추출
             for doc in docs:
                 if not title_score(title, doc.get("title", "")):
+                    continue
+                if not author_matches(author, doc.get("author_name", [])):
                     continue
                 isbn_list = doc.get("isbn", [])
                 if isbn_list:

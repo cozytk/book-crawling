@@ -2,7 +2,7 @@ export interface Bookmark {
   searchId: string;
   query: string;
   avgRating: number | null;
-  totalReviews: number;
+  totalReviews: number | null;
   platformCount: number;
   bookmarkedAt: string;
 }
@@ -13,7 +13,10 @@ function load(): Bookmark[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is Bookmark =>
+      entry && typeof entry.searchId === "string" && typeof entry.query === "string"
+    ) : [];
   } catch {
     return [];
   }

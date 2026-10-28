@@ -107,9 +107,7 @@ export default function HistoryPage() {
       }
 
       if (sortBy === "total_reviews") {
-        const cmp = desc
-          ? b.total_reviews - a.total_reviews
-          : a.total_reviews - b.total_reviews;
+        const cmp = compareNullableNumber(a.total_reviews, b.total_reviews, desc);
         if (cmp !== 0) return cmp;
       }
 
@@ -165,8 +163,8 @@ export default function HistoryPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">검색 히스토리</h1>
+      <div className="flex flex-wrap gap-3 items-center justify-between">
+        <div><h1 className="text-2xl font-bold">검색 기록</h1><p className="text-xs text-gray-500 mt-2">최근 500개의 기록을 표시합니다.</p></div>
         <Link href="/" className="text-sm text-blue-600 hover:text-blue-800">
           ← 검색으로 돌아가기
         </Link>
@@ -187,7 +185,7 @@ export default function HistoryPage() {
             >
               <option value="created_at">검색일</option>
               <option value="avg_rating">평균 평점</option>
-              <option value="total_reviews">리뷰 수</option>
+              <option value="total_reviews">평가 수</option>
               <option value="platform_rating">플랫폼 평점</option>
             </select>
           </div>
@@ -227,7 +225,7 @@ export default function HistoryPage() {
             disabled={isRefreshing || isLoading}
             className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isRefreshing ? "새로고침 중..." : "히스토리 새로고침"}
+            {isRefreshing ? "새로고침 중..." : "기록 새로고침"}
           </button>
 
           <div className="ml-auto flex items-center gap-3">
@@ -313,7 +311,7 @@ export default function HistoryPage() {
 
             const displayReviews = allSelected
               ? search.total_reviews
-              : displayedRatings.reduce((acc, r) => acc + r.review_count, 0);
+              : displayedRatings.some((r) => r.review_count != null) ? displayedRatings.reduce((acc, r) => acc + (r.review_count ?? 0), 0) : null;
 
             const displayPlatformCount = allSelected
               ? search.platform_count
@@ -324,9 +322,9 @@ export default function HistoryPage() {
                 key={search.id}
                 className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow"
               >
-                <div className="flex items-start justify-between mb-3">
+                <div className="flex flex-wrap gap-3 items-start justify-between mb-3">
                   <div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                       <h3 className="font-semibold text-lg">{search.query}</h3>
                       <Link
                         href={`/history/${search.id}`}
@@ -354,7 +352,7 @@ export default function HistoryPage() {
                         </p>
                       )}
                       <p className="text-xs text-gray-500">
-                        {displayReviews.toLocaleString()}개 리뷰 · {displayPlatformCount}개 플랫폼
+                        {displayReviews == null ? "평가 수 미확인" : `확인된 평가 ${displayReviews.toLocaleString()}개`} · {displayPlatformCount}개 플랫폼
                       </p>
                     </div>
                     <BookmarkButton

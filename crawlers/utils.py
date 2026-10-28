@@ -1,37 +1,60 @@
 """크롤러 공통 유틸리티"""
 
-import difflib
+import json
+import math
 import re
 import unicodedata
 
 
 def title_score(query: str, title: str) -> float:
-    """Popularity must never make an unrelated book a title match."""
+    """Identity gates precede ranking; subtitles cannot hide a derivative work."""
     def normalize(value):
         return "".join(c for c in unicodedata.normalize("NFKC", value).casefold() if c.isalnum())
 
+    title = re.split(r"\s+by\s+", title, flags=re.I)[0]
     q, t = normalize(query), normalize(title)
     if not q or not t:
         return 0.0
+    derivatives = [r"해설", r"워크북", r"문제집", r"독후감", r"요약", r"만화", r"어린이", r"청소년",
+                   r"\bworkbook\b", r"\bstudy guide\b", r"\bsummary\b", r"\babridged\b", r"\badapted\b"]
+    if any(bool(re.search(pattern, query, re.I)) != bool(re.search(pattern, title, re.I)) for pattern in derivatives):
+        return 0.0
+    def volumes(value):
+        return re.findall(r"(?<![가-힣])([상중하])(?:권|편)?(?=$|[\s)\]])|(?:제\s*)?(\d+)\s*(?:권|부|편)(?![가-힣])", value)
+    if volumes(query) and volumes(query) != volumes(title):
+        return 0.0
     if q == t:
         return 1.0
+    if re.search(r"[가-힣]", query) and q in t:
+        remainder = t.replace(q, "", 1)
+        if remainder and remainder.isascii() and remainder.isalpha():
+            return 0.90
     if re.findall(r"\d+", q) and re.findall(r"\d+", q) != re.findall(r"\d+", t):
         return 0.0
     primary = normalize(re.split(r"\s[-–—]\s|[:：]", title)[0])
     if q == primary:
         return 0.98
+    if q == normalize(re.sub(r"\([^)]*\)|\[[^]]*\]", "", title)):
+        return 0.96
     if re.search(r"[a-zA-Z]", query):
         words = re.findall(r"[a-z0-9]+", query.casefold())
         title_words = set(re.findall(r"[a-z0-9]+", title.casefold()))
         if not all(word in title_words for word in words):
             return 0.0
-    if len(q) >= 3 and q in t:
-        return 0.85
-    # Short titles and volume numbers require exact matching.
-    if len(q) < 4 or re.findall(r"\d+", q) != re.findall(r"\d+", t):
-        return 0.0
-    score = difflib.SequenceMatcher(None, q, t).ratio()
-    return score if score >= 0.8 else 0.0
+    # Parenthesized publication notes and bilingual titles are allowed; arbitrary
+    # appended words (e.g. 데미안 해설) are not title identity evidence.
+    without_notes = normalize(re.sub(r"\([^)]*\)|\[[^]]*\]", "", re.split(r"\s[-–—]\s|[:：]", title)[0]))
+    if q == without_notes:
+        return 0.96
+    if re.search(r"[가-힣]", query) and q in without_notes:
+        remainder = without_notes.replace(q, "", 1)
+        if remainder and remainder.isascii() and remainder.isalpha():
+            return 0.90
+    if not re.search(r"[가-힣]", query) and re.search(r"[가-힣]", title):
+        english = normalize(re.sub(r"[가-힣]+", "", title))
+        if q == english:
+            return 0.90
+    return 0.0
 
 
 def is_isbn(query: str) -> bool:
@@ -50,3 +73,94 @@ def is_isbn(query: str) -> bool:
 def clean_isbn(isbn: str) -> str:
     """ISBN에서 하이픈/공백 제거"""
     return isbn.replace("-", "").replace(" ", "")
+
+
+def isbn13(value: str) -> str:
+    value = clean_isbn(str(value)).upper()
+    if len(value) == 10:
+        prefix = "978" + value[:9]
+        if not prefix.isdigit():
+            return ""
+        return prefix + str((10 - sum(int(n) * (1 if i % 2 == 0 else 3) for i, n in enumerate(prefix)) % 10) % 10)
+    return value if len(value) == 13 and value.isdigit() else ""
+
+
+def isbn_matches(expected, candidates):
+    return bool(isbn13(expected)) and any(isbn13(expected) == isbn13(candidate) for candidate in candidates)
+
+
+def valid_rating(value, scale, best=None):
+    try:
+        value = float(value)
+        if best is not None and float(best) != scale:
+            return None
+        return value if math.isfinite(value) and 0 <= value <= scale else None
+    except (TypeError, ValueError):
+        return None
+
+
+def count_number(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(str(value).replace(",", ""))
+        return int(number) if math.isfinite(number) and number >= 0 and number.is_integer() else None
+    except (TypeError, ValueError):
+        return None
+
+
+def json_nodes(soup):
+    def walk(value):
+        if isinstance(value, list):
+            for entry in value:
+                yield from walk(entry)
+        elif isinstance(value, dict):
+            yield value
+            # Only JSON-LD graphs, never recommendations nested in a Book.
+            if "@graph" in value:
+                yield from walk(value["@graph"])
+    for script in soup.select('script[type="application/ld+json"]'):
+        try:
+            yield from walk(json.loads(script.get_text()))
+        except (ValueError, TypeError):
+            continue
+
+
+def book_node(soup, title, allow_product=False):
+    for node in json_nodes(soup):
+        kinds = node.get("@type", [])
+        kinds = [kinds] if isinstance(kinds, str) else kinds
+        if not set(kinds) & ({"Book", "Product"} if allow_product else {"Book"}):
+            continue
+        if title and not title_score(title, str(node.get("name", ""))):
+            continue
+        return node
+    return None
+
+
+def author_matches(expected, actual):
+    """Only compare compatible scripts; never infer translated-name aliases."""
+    if not expected or not actual:
+        return True
+    expected_text = " ".join(expected) if isinstance(expected, list) else str(expected)
+    actual_text = " ".join(actual) if isinstance(actual, list) else str(actual)
+    if bool(re.search(r"[가-힣]", expected_text)) != bool(re.search(r"[가-힣]", actual_text)):
+        return True
+    normalize = lambda s: set(re.findall(r"[a-z가-힣]+", s.casefold())) - {"by", "author", "지은이", "옮긴이"}
+    left, right = normalize(expected_text), normalize(actual_text)
+    return len(left & right) >= min(2, len(left), len(right)) if left and right else True
+
+
+def structured_isbns(container):
+    """Only explicit product identifier fields, never arbitrary page text."""
+    values = []
+    for node in [container, *container.select('[data-isbn], [data-isbn13], [data-isbn10], [data-bid], [data-pid], [name="isbn"], [itemprop="isbn"]')]:
+        for attr in ("data-isbn", "data-isbn13", "data-isbn10", "data-bid", "data-pid", "content", "value"):
+            value = node.get(attr)
+            if value and is_isbn(str(value)):
+                values.append(str(value))
+        if node.get("itemprop") == "isbn":
+            values.append(node.get_text(strip=True))
+    for node in container.select('[id*="isbn"], [id*="ISBN"]'):
+        values.extend(re.findall(r"(?<!\d)(?:97[89][\d -]{10,20}|[\d -]{9,18}[\dX])(?!\d)", node.get_text(" ", strip=True)))
+    return values
