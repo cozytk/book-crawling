@@ -136,6 +136,20 @@ class GoodreadsCrawler(BaseHttpCrawler):
         Returns:
             (book_url, book_title) 또는 (None, "") if not found
         """
+        # Native header search exposes a public Book autocomplete response.
+        # It carries exact work rating counts, title, author and Book IDs in
+        # one response, so a work query need not request a blocked detail page.
+        # It does not prove an explicit ISBN or expose written review counts.
+        if self._expected_author and not is_isbn(self._original_query or keyword):
+            try:
+                autocomplete = f'{self.base_url}/book/auto_complete?format=json&q={urllib.parse.quote(keyword)}'
+                payload, _ = self._fetch_with_redirect(autocomplete)
+                found = self._autocomplete_aggregate(payload, keyword)
+                if found:
+                    return found
+            except Exception:
+                pass
+
         encoded_title = urllib.parse.quote(keyword)
         search_url = f"https://www.goodreads.com/search?q={encoded_title}&tab=books&filter=title"
 
@@ -205,6 +219,52 @@ class GoodreadsCrawler(BaseHttpCrawler):
             self.failure_status="parse_error"
 
         return None, ""
+
+    def _autocomplete_aggregate(self, payload, keyword):
+        rows = json.loads(payload)
+        if not isinstance(rows, list):
+            return None
+        candidates=[]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            title=row.get('bookTitleBare') or row.get('title')
+            author=row.get('author',{})
+            author=author.get('name','') if isinstance(author,dict) else ''
+            identifier=str(row.get('bookId',''))
+            work_id=str(row.get('workId',''))
+            href=row.get('bookUrl','')
+            if not isinstance(title,str) or not isinstance(href,str) or not identifier.isdigit() or not work_id.isdigit():
+                continue
+            parsed=urllib.parse.urlsplit(urllib.parse.urljoin(self.base_url,href))
+            if (parsed.scheme!='https' or parsed.netloc!='www.goodreads.com'
+                    or not re.fullmatch(r'/book/show/'+re.escape(identifier)+r'(?:\.[^/]*)?',parsed.path)):
+                continue
+            score=candidate_score(keyword,title,author,self._expected_author)
+            if (not score or (not re.search(r'\b(?:band|vol(?:ume)?\.?|part)\s+(?:[IVX]+|\d+)\b',keyword,re.I)
+                    and re.search(r'\s[-–—:]\s*(?:band|vol(?:ume)?\.?|part)\s+(?:[IVX]+|\d+)\b',title,re.I))):
+                continue
+            count=row.get('ratingsCount')
+            if isinstance(count,bool) or not re.fullmatch(r'\d+',str(count)):
+                continue
+            rating=valid_rating(row.get('avgRating'),5)
+            if rating is None:
+                continue
+            candidates.append((int(count),score,title,author,identifier,rating,work_id))
+        if not candidates:
+            return None
+        count,_,title,author,identifier,rating,work_id=max(candidates,key=lambda row:(row[0],row[1]))
+        self.rating_count=count
+        self.text_review_count=None
+        self.book_author=author
+        self._cached_rating=rating if count else None
+        self._cached_review_count=count
+        self._rating_loaded=self.count_observed=True
+        transport=active_transport()
+        if transport:
+            transport.diagnostics.setdefault(self.name,{}).update({'method':'verified_autocomplete_aggregate',
+                'work_id':work_id,'query':keyword,'eligible_candidates':len(candidates)})
+        return f'{self.base_url}/book/show/{identifier}',title
 
     def _parse_detail_page(self, html: str) -> tuple[str, float | None, int]:
         """
