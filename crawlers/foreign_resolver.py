@@ -35,6 +35,7 @@ class ForeignQuery:
     query: str | None = None
     isbn: str | None = None
     author: str | list[str] | None = None
+    related_isbns: tuple[str, ...] = ()
 
     @property
     def available(self) -> bool:
@@ -84,14 +85,16 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
                 original = lookup.find_original(isbn=identity.isbn)
                 if original:
                     return ForeignQuery(query=original["title"],isbn=original.get("isbn"),
-                                        author=original.get("authors") or roman_author)
+                                        author=original.get("authors") or roman_author,
+                                        related_isbns=original.get("related_isbns", ()))
             except Exception:
                 pass
         if not _is_korean(korean_query):
             candidate = lookup.search(korean_query, roman_author)
             return ForeignQuery(query=candidate.title if candidate else korean_query,
                                 isbn=candidate.isbn if candidate else None,
-                                author=candidate.authors if candidate else None)
+                                author=candidate.authors if candidate else None,
+                                related_isbns=candidate.related_isbns if candidate else ())
         return ForeignQuery()
 
     original_title = info.get("title")
@@ -120,7 +123,8 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
             logger.debug(f"원서 연결 (ISBN 없음): {original_title}")
         query = re.split(r"\s[-–—]\s|[:：]|\s/\s", candidate.title if candidate else primary,maxsplit=1)[0].strip()
         return ForeignQuery(query=query, isbn=foreign_isbn,
-                            author=candidate.authors if candidate else re.split(r"[,、，]", original_author or ""))
+                            author=candidate.authors if candidate else re.split(r"[,、，]", original_author or ""),
+                            related_isbns=candidate.related_isbns if candidate else ())
 
     if isbn13:
         # 원서 제목 없음 → 외부 API에서 원서 정보 조회
@@ -133,6 +137,7 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
                 logger.debug(f"원서 연결: {query} → ISBN {isbn}")
             else:
                 logger.debug(f"원서 연결 (ISBN 없음): {query}")
-            return ForeignQuery(query=query, isbn=isbn, author=authors or original_author)
+            return ForeignQuery(query=query, isbn=isbn, author=authors or original_author,
+                                related_isbns=original.get("related_isbns", ()))
 
     return ForeignQuery()

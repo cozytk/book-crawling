@@ -29,6 +29,7 @@ class ISBNResult:
     title: str
     authors: list[str]
     provider: str
+    related_isbns: tuple[str, ...] = ()
 
     @property
     def isbn_13(self) -> str | None:
@@ -338,6 +339,7 @@ class OpenLibraryProvider(ISBNProvider):
                             title=doc.get("title", ""),
                             authors=authors,
                             provider=self.name,
+                            related_isbns=tuple(dict.fromkeys([*isbn_list, *doc.get("isbn", [])])),
                         )))
 
             if candidates:
@@ -416,6 +418,9 @@ class OpenLibraryProvider(ISBNProvider):
                 "title": title,
                 "authors": [],
                 "isbn": original_isbn,
+                "related_isbns": tuple(dict.fromkeys(i for ed in (editions_data or {}).get("entries", [])
+                    if title_score(title, ed.get("title", ""))
+                    for i in [*ed.get("isbn_13", []), *ed.get("isbn_10", [])])),
             }
 
         except Exception:

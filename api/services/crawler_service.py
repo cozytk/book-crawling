@@ -25,13 +25,15 @@ REASONS = {"not_found": "일치하는 책을 찾지 못했습니다", "identity_
 
 
 async def crawl_platform(crawler_cls, query, fallback_query=None, original_query=None, execution_id=None,
-                         expected_author=None, on_failure=None, identity_title=None, identity_isbn=None):
+                         expected_author=None, on_failure=None, identity_title=None, identity_isbn=None,
+                         related_isbns=()):
     async def execute():
         async with crawler_cls() as crawler:
             crawler.set_session(uuid.uuid4().hex[:8], original_query or query, execution_id=execution_id)
             expected_title = identity_title or (fallback_query if fallback_query and not is_isbn(fallback_query) else (query if not is_isbn(query) else None))
             crawler.expected_identity(expected_title, expected_author, strict_isbn=is_isbn(original_query or query))
             crawler._preferred_isbn = identity_isbn
+            crawler._related_isbns = related_isbns if not is_isbn(original_query or query) else ()
             result = await crawler.crawl(query, attempt=1)
             first_failure = crawler.failure_status
             if result is None and fallback_query and fallback_query != query and not is_isbn(original_query or ""):
@@ -91,6 +93,7 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
                     result = await asyncio.wait_for(crawl_platform(CRAWLERS[platform], source_query,
                         fallback, original_query=query, execution_id=execution_id,
                         expected_author=foreign.author, identity_isbn=foreign.isbn,
+                        related_isbns=foreign.related_isbns,
                         on_failure=failure.append), PLATFORM_TIMEOUT)
             else:
                 if identity_task is None:

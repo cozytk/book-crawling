@@ -43,6 +43,24 @@ async def test_work_info_uses_verified_isbn_and_skips_blocked_html():
     assert record.author=="Leo Tolstoy" and record.comparison_scope=="work"
 
 
+def test_catalog_work_isbns_can_resolve_a_sparse_or_split_librarything_work():
+    partial="9781909115033"
+    payload={partial:{"id":partial,"type":"isbn","work":"3796965",
+        "link":"https://www.librarything.com/work/3796965","copies":"978","reviews":"17","rating":8.75},
+        ISBN:{"id":ISBN,"type":"isbn","work":"995","link":"https://www.librarything.com/work/995",
+              "copies":"34338","reviews":"520","rating":8.51}}
+    crawler=LibraryThingCrawler()
+    crawler._related_isbns=(ISBN,)
+    body='LT_workinfo('+json.dumps(payload)+');'
+    with patch('crawlers.librarything.fetch_sync',return_value=PageResponse(body,'https://www.librarything.com')):
+        assert crawler._work_info(partial)[0]=='https://www.librarything.com/work/995'
+    assert crawler.book_isbn==ISBN and crawler._cached_rating==4.255
+    # A user-specified ISBN is not expanded to the other catalog editions.
+    exact=LibraryThingCrawler()
+    with patch('crawlers.librarything.fetch_sync',return_value=PageResponse(body,'https://www.librarything.com')):
+        assert exact._work_info(partial)[0]=='https://www.librarything.com/work/3796965'
+
+
 @pytest.mark.parametrize('overrides', [
     {'id':'9780451530172'}, {'type':'lccn'}, {'link':'https://example.com/work/995'},
     {'link':'https://www.librarything.com/work/7701'}, {'work':'0'}, {'rating':11},

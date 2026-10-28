@@ -14,7 +14,7 @@ import cloudscraper
 from bs4 import BeautifulSoup, Tag
 
 from .base_http import BaseHttpCrawler
-from .utils import is_isbn, clean_isbn, isbn_matches, title_score, book_node, valid_rating, count_number
+from .utils import is_isbn, clean_isbn, isbn13, isbn_matches, title_score, book_node, valid_rating, count_number
 
 
 class LibraryThingCrawler(BaseHttpCrawler):
@@ -52,7 +52,11 @@ class LibraryThingCrawler(BaseHttpCrawler):
         clean = clean_isbn(identifier).upper()
         if not is_isbn(clean):
             return None, ""
-        url = f"{self.base_url}/api/json/workinfo.js?ids={clean}&callback=LT_workinfo"
+        identifiers = list(dict.fromkeys(i for value in [clean, *getattr(self, "_related_isbns", ())]
+                                        if (i := isbn13(value))))[:40]
+        # A single upstream catalog work may be split into several LT works.
+        # Batch only ISBNs from that verified work, then prefer LT's main group.
+        url = f"{self.base_url}/api/json/workinfo.js?ids={','.join(identifiers)}&callback=LT_workinfo"
         try:
             response = fetch_sync(url, {"User-Agent": self.user_agent, "Accept": "application/javascript"})
             if response is None:
@@ -67,19 +71,25 @@ class LibraryThingCrawler(BaseHttpCrawler):
                 self.failure_status = "parse_error"
                 return None, ""
             payload = json.loads(match.group(1))
-            item = payload.get(clean)
-            if not isinstance(item, dict):
+            candidates=[]
+            for requested in identifiers:
+                item = payload.get(requested)
+                if not isinstance(item, dict) or not item.get("work"):
+                    continue
+                work = str(item["work"])
+                if (item.get("type") != "isbn" or not isbn_matches(requested, [item.get("id", "")])
+                        or not work.isdigit() or int(work) <= 0
+                        or self._normalize_work_url(str(item.get("link", ""))) != f"{self.base_url}/work/{work}"):
+                    self.failure_status = "identity_mismatch"
+                    continue
+                score = valid_rating(item.get("rating"), 10)
+                if score is None:
+                    self.failure_status = "parse_error"
+                    continue
+                candidates.append((count_number(item.get("copies")) or 0, requested, work, score, item))
+            if not candidates:
                 return None, ""
-            work = str(item.get("work", ""))
-            if (item.get("type") != "isbn" or not isbn_matches(clean, [item.get("id", "")])
-                    or not work.isdigit() or int(work) <= 0
-                    or self._normalize_work_url(str(item.get("link", ""))) != f"{self.base_url}/work/{work}"):
-                self.failure_status = "identity_mismatch"
-                return None, ""
-            score = valid_rating(item.get("rating"), 10)
-            if score is None:
-                self.failure_status = "parse_error"
-                return None, ""
+            _, clean, work, score, item=max(candidates,key=lambda entry:entry[0])
             self._cached_rating = score / 2 if score > 0 else None
             self.text_review_count = count_number(item.get("reviews"))
             self.rating_count = None
