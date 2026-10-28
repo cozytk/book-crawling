@@ -28,7 +28,7 @@ REASONS = {"not_found": "일치하는 책을 찾지 못했습니다", "identity_
 
 async def crawl_platform(crawler_cls, query, fallback_query=None, original_query=None, execution_id=None,
                          expected_author=None, on_failure=None, identity_title=None, identity_isbn=None,
-                         related_isbns=(), strict_edition=False, prefer_popular=False):
+                         related_isbns=(), strict_edition=False, prefer_popular=False, verified_product=None):
     async def execute():
         async with crawler_cls() as crawler:
             crawler.set_session(uuid.uuid4().hex[:8], original_query or query, execution_id=execution_id)
@@ -37,6 +37,7 @@ async def crawl_platform(crawler_cls, query, fallback_query=None, original_query
             crawler._preferred_isbn = identity_isbn
             crawler._related_isbns = related_isbns if not is_isbn(original_query or query) else ()
             crawler._prefer_popular_edition=prefer_popular
+            crawler._verified_product=verified_product
             result = await crawler.crawl(query, attempt=1)
             first_failure = crawler.failure_status
             if result is None and fallback_query and fallback_query != query and not is_isbn(original_query or ""):
@@ -103,13 +104,14 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
                                 try:
                                     result=await asyncio.wait_for(crawl_platform(AmazonCrawler,candidate['url'].rsplit('/',1)[-1],
                                         original_query=query,execution_id=execution_id,expected_author=candidate['source_author'],
-                                        identity_title=source_identity.validation_title(candidate['title']),on_failure=failure.append),min(4,remaining))
+                                        identity_title=source_identity.validation_title(candidate['title']),
+                                        verified_product=candidate,on_failure=failure.append),min(4,remaining))
                                 except asyncio.TimeoutError:
                                     result=None
                                     failure.append('timeout')
                                 if result and result.rating is not None:
                                     result.book_title=candidate['title']
-                                    result.edition_note='확인한 상품 판본 · 상세 평점 재조회'
+                                    result.edition_note='확인한 상품 판본 · 집계 평점 재조회'
                                     used_detail=True
                                     break
                             if not result or result.rating is None:
@@ -123,7 +125,7 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
                                 transport=active_transport()
                                 if transport:
                                     diagnostic=transport.diagnostics.setdefault('amazon',{})
-                                    if used_detail:
+                                    if used_detail and diagnostic.get('method')!='verified_product_popover':
                                         diagnostic['method']='verified_product_detail'
                                     diagnostic.update({'identity_provenance':product['provenance'],'identity_observed_at':product.get('observed_at')})
                     except asyncio.TimeoutError:

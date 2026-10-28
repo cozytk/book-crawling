@@ -32,13 +32,14 @@ class AmazonCrawler(BaseHttpCrawler):
         super().__init__()
         self._cached_rating: float | None = None
         self._cached_review_count: int = 0
+        self._verified_product = None
 
-    def _fetch_with_headers(self, url: str) -> str:
+    def _fetch_with_headers(self, url: str, extra_headers=None) -> str:
         """
         Amazon 페이지 가져오기 (브라우저와 유사한 헤더 포함)
         """
         response = fetch_sync(url, {"User-Agent": self.user_agent, "Accept-Language": "en-US,en;q=0.9",
-            "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"})
+            "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", **(extra_headers or {})})
         if response is not None:
             transport=active_transport()
             if transport:
@@ -62,6 +63,7 @@ class AmazonCrawler(BaseHttpCrawler):
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"macOS"',
         }
+        headers.update(extra_headers or {})
         for k, v in headers.items():
             req.add_header(k, v)
 
@@ -171,6 +173,30 @@ class AmazonCrawler(BaseHttpCrawler):
             clean = core + ("X" if check == 10 else str(check))
         url = f"https://www.amazon.com/dp/{clean}"
 
+        # The public rating popover omits title/author. Use it only after the
+        # service has matched a separately verified product to the current work.
+        product_identity = self._verified_product
+        if product_identity and product_identity.get('url') == url:
+            title = product_identity.get('title', '')
+            author = product_identity.get('source_author', '')
+            if (title_score(self._expected_title, title)
+                    and self._expected_author and author_matches(self._expected_author, author)):
+                try:
+                    widget = f'{self.base_url}/review/widgets/average-customer-review/popover/ref=acr_search__popover?ie=UTF8&asin={clean}&ref=acr_search__popover&contextId=search'
+                    html = self._fetch_with_headers(widget, {'X-Requested-With': 'XMLHttpRequest', 'Referer': url})
+                    aggregate = self._parse_verified_popover(html, clean)
+                    if aggregate:
+                        self._cached_rating, self.rating_count = aggregate
+                        self._cached_review_count = self.rating_count
+                        self.book_author = author
+                        self._rating_loaded = self.count_observed = True
+                        transport = active_transport()
+                        if transport:
+                            transport.diagnostics.setdefault(self.name, {})['method'] = 'verified_product_popover'
+                        return url, title
+                except Exception:
+                    pass
+
         try:
             html = self._fetch_with_headers(url)
         except Exception:
@@ -194,6 +220,29 @@ class AmazonCrawler(BaseHttpCrawler):
             return url, title
 
         return None, ""
+
+    @staticmethod
+    def _parse_verified_popover(html, asin):
+        soup = BeautifulSoup(html, 'html.parser')
+        # Bind the aggregate to all of the widget's own product/review links;
+        # percentages in its star histogram are not participant counts.
+        linked = []
+        for anchor in soup.select('a[href]'):
+            parsed = urllib.parse.urlsplit(urllib.parse.urljoin('https://www.amazon.com', anchor['href']))
+            match = re.search(r'/(?:dp|product-reviews|portal/customer-reviews)/([A-Z0-9]{10})(?:/|$)', parsed.path, re.I)
+            if match:
+                if parsed.hostname != 'www.amazon.com':
+                    return None
+                linked.append(match.group(1).upper())
+        if not linked or any(value != asin.upper() for value in linked):
+            return None
+        score_node = soup.select_one('[data-hook="acr-average-stars-rating-text"]')
+        count_node = soup.select_one('[data-hook="total-review-count"]')
+        score = AmazonCrawler._star_value(score_node.get_text(' ', strip=True)) if score_node else None
+        count = re.fullmatch(r'\s*([\d,]+)\s+global\s+ratings?\s*', count_node.get_text(' ', strip=True), re.I) if count_node else None
+        if score is None or not count:
+            return None
+        return score, count_number(count.group(1))
 
     def search_by_keyword(self, keyword: str) -> tuple[str | None, str]:
         """
