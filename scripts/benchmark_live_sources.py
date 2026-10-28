@@ -21,8 +21,8 @@ CASES = [
 ]
 
 
-async def benchmark(base, output):
-    semaphore = asyncio.Semaphore(2)
+async def benchmark(base, output, cases=None, concurrency=2):
+    semaphore = asyncio.Semaphore(concurrency)
     headers = {"x-api-token": os.environ["API_SERVICE_TOKEN"]} if os.getenv("API_SERVICE_TOKEN") else {}
     if os.getenv("DEPLOYMENT_BYPASS"):
         headers["x-vercel-protection-bypass"] = os.environ["DEPLOYMENT_BYPASS"]
@@ -34,6 +34,8 @@ async def benchmark(base, output):
                 events, first, event = [], None, None
                 async with client.stream("POST", "/api/search/stream", json={"query":query, "platforms":platforms, "force_refresh":True}) as response:
                     response.raise_for_status()
+                    if not response.headers.get('content-type','').startswith('text/event-stream'):
+                        raise ValueError('Expected the search API stream, not a protection or HTML page')
                     async for line in response.aiter_lines():
                         if line.startswith("event: "):
                             event = line[7:]
@@ -53,7 +55,7 @@ async def benchmark(base, output):
                                   "scores":{r["platform"]:r["rating"] for r in ratings},
                                   "states":{s["platform"]:s["status"] for s in states},"metrics":result["metrics"]},ensure_ascii=False),flush=True)
                 return result
-        results = await asyncio.gather(*(search(case) for case in CASES))
+        results = await asyncio.gather(*(search(case) for case in (cases or CASES)))
     Path(output).write_text(json.dumps({"at":datetime.now(timezone.utc).isoformat(), "base":base,
                                        "cases":results},ensure_ascii=False,indent=2))
 
@@ -62,5 +64,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument('--cases-file',help='JSON array of objects with query and optional platforms')
+    parser.add_argument('--concurrency',type=int,default=2,choices=range(1,4))
     args = parser.parse_args()
-    asyncio.run(benchmark(args.base_url, args.output))
+    cases=[(entry['query'],entry.get('platforms')) for entry in json.loads(Path(args.cases_file).read_text())] if args.cases_file else None
+    asyncio.run(benchmark(args.base_url, args.output,cases,args.concurrency))

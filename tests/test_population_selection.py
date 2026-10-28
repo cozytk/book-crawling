@@ -49,6 +49,10 @@ def test_goodreads_genitive_spelling_does_not_prefer_a_23_rating_edition():
     def card(identifier,title,count):
         return f'<div class="Book"><span data-testid="book-item-title"><a href="/book/show/{identifier}">{title}</a></span><a href="/author/show/1">Johann Wolfgang von Goethe</a><span data-testid="book-item-ratings-count">{count} ratings</span></div>'
     html=card('705790','Die Leiden des jungen Werther','165k')+card('2','Die Leiden des jungen Werthers: In der Fassung von 1774. Roman (Fischer Klassik Plus)','23')
+    html+=card('3','Die Leiden des jungen Werther - Band I','200k')
+    with patch.object(c,'_fetch_with_redirect',return_value=(html,'https://www.goodreads.com/search')):
+        assert c.search_by_keyword('Die Leiden des jungen Werthers')[0].endswith('/705790')
+    html=html.replace('<span data-testid="book-item-ratings-count">165k ratings</span>','<span aria-label="Average rating of 3.70 stars, 165 thousand ratings"></span>')
     with patch.object(c,'_fetch_with_redirect',return_value=(html,'https://www.goodreads.com/search')):
         assert c.search_by_keyword('Die Leiden des jungen Werthers')[0].endswith('/705790')
 

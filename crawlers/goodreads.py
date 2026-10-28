@@ -162,6 +162,8 @@ class GoodreadsCrawler(BaseHttpCrawler):
         def score(link):
             container = link.find_parent("tr") or link.find_parent(class_="Book") or link.parent
             authors = ", ".join(a.get_text(" ", strip=True) for a in container.select('a[href*="/author/show/"]'))
+            if not re.search(r'\b(?:band|vol(?:ume)?\.?|part)\s+(?:[IVX]+|\d+)\b',keyword,re.I) and re.search(r'\s[-–—:]\s*(?:band|vol(?:ume)?\.?|part)\s+(?:[IVX]+|\d+)\b',link.get_text(' ',strip=True),re.I):
+                return 0
             # Some server-rendered variants omit the byline. The detail Book
             # node must still prove the known author before a rating is used.
             return candidate_score(keyword, link.get_text(" ", strip=True), authors,
@@ -169,14 +171,19 @@ class GoodreadsCrawler(BaseHttpCrawler):
         def support(link):
             container = link.find_parent("tr") or link.find_parent(class_="Book") or link.parent
             counter=container.select_one('[data-testid="book-item-ratings-count"], .minirating')
-            text=counter.get_text(' ',strip=True) if counter else ''
+            # Some responses put the population in the row's accessibility
+            # label instead of the expected counter. Stay inside this Book
+            # row; ranking hints never become exact output counts.
+            text=' '.join([counter.get_text(' ',strip=True) if counter else '',
+                           container.get_text(' ',strip=True),
+                           *[node.get('aria-label','') for node in container.select('[aria-label]')]])
             # Rounded search counts are ranking hints only. Exact output
             # counts always come from the selected Book's detail aggregate.
-            match=re.search(r'([\d,.]+)\s*(k|m|thousand|million)?\s*ratings?',text,re.I)
-            if not match:
+            matches=re.findall(r'([\d,.]+)\s*(k|m|thousand|million)?\s*ratings?\b',text,re.I)
+            if not matches:
                 return 0
-            value=float(match.group(1).replace(',',''))
-            return value*{'k':1000,'m':1000000,'thousand':1000,'million':1000000}.get((match.group(2) or '').lower(),1)
+            return max(float(value.replace(',',''))*{'k':1000,'m':1000000,'thousand':1000,'million':1000000}.get(unit.lower(),1)
+                       for value,unit in matches)
         book_link = max((link for link in links if score(link)), key=lambda link:(support(link),score(link)), default=None)
         transport = active_transport()
         if transport:
