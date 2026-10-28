@@ -4,7 +4,7 @@ import time
 from collections import OrderedDict
 from threading import Lock
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 TTL = {"done": 86400, "not_found": 600, "identity_mismatch": 600,
        "blocked": 60, "timeout": 15, "parse_error": 30, "network_error": 15, "unavailable": 30}
 _entries = OrderedDict()

@@ -161,3 +161,16 @@ async def test_yes24_ranks_written_reviews_and_preserves_short_comments():
     with patch.object(c,'_fetch_html',return_value=detail):
         assert await c.get_rating(url)==(9.3,307)
     assert c.text_review_count==307 and c.short_review_count==400 and c.book_isbn=='9788937462665'
+def test_title_search_uses_native_review_order_but_explicit_isbn_does_not(monkeypatch):
+    from crawlers.yes24 import Yes24Crawler
+    crawler=Yes24Crawler()
+    requests=[]
+    def fetch(url):
+        requests.append(url)
+        return '<p>검색결과 없음</p>'
+    monkeypatch.setattr(crawler,'_fetch_html',fetch)
+    assert crawler.search_by_keyword('페스트')==(None,'')
+    assert 'order=REVIEW_CNT' in requests[-1]
+    crawler.search_by_keyword('9788937462672')
+    assert 'order=REVIEW_CNT' not in requests[-1]
+

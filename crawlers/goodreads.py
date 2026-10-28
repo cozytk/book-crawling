@@ -238,7 +238,7 @@ class GoodreadsCrawler(BaseHttpCrawler):
                 continue
             parsed=urllib.parse.urlsplit(urllib.parse.urljoin(self.base_url,href))
             if (parsed.scheme!='https' or parsed.netloc!='www.goodreads.com'
-                    or not re.fullmatch(r'/book/show/'+re.escape(identifier)+r'(?:\.[^/]*)?',parsed.path)):
+                    or not re.fullmatch(r'/book/show/'+re.escape(identifier)+r'(?:[.-][^/]*)?',parsed.path)):
                 continue
             score=candidate_score(keyword,title,author,self._expected_author)
             if (not score or (not re.search(r'\b(?:band|vol(?:ume)?\.?|part)\s+(?:[IVX]+|\d+)\b',keyword,re.I)

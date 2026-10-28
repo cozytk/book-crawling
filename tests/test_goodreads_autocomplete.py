@@ -46,6 +46,17 @@ def test_larger_valid_work_population_wins_over_partial_volume():
     assert result._autocomplete_aggregate(json.dumps([small,partial,book()]),'Hamlet')[0].endswith('/1420')
 
 
+def test_modern_hyphenated_book_url_still_proves_the_same_book_id():
+    result=crawler()
+    assert result._autocomplete_aggregate(json.dumps([book(bookUrl='/book/show/1420-hamlet')]),'Hamlet')[0].endswith('/1420')
+    result.expected_identity('Miserables','Victor Hugo',strict_isbn=False)
+    actual=book(bookId='36377471',workId='3208463',bookUrl='/book/show/36377471-les-miserables',
+                title='Les Miserables',bookTitleBare='Les Miserables',author={'name':'Victor Hugo'},
+                avgRating='4.22',ratingsCount=868925)
+    assert result._autocomplete_aggregate(json.dumps([actual]),'Miserables')[0].endswith('/36377471')
+    assert result.rating_count==868925
+
+
 def test_explicit_isbn_fallback_does_not_use_work_only_autocomplete(monkeypatch):
     result=crawler()
     result._original_query='9780521618748'

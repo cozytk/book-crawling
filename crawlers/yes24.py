@@ -38,6 +38,8 @@ class Yes24Crawler(BaseHttpCrawler):
         """책 검색 후 가장 관련 있는 결과의 상세 페이지 URL 반환"""
         encoded_query = urllib.parse.quote(keyword)
         search_url = f"https://www.yes24.com/Product/Search?domain=ALL&query={encoded_query}"
+        if not is_isbn(keyword):
+            search_url += '&order=REVIEW_CNT'
 
         def identify():
             try:
