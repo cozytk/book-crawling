@@ -12,6 +12,7 @@ from crawlers.transport import SearchTransport, run_parser
 from crawlers.utils import is_isbn
 from models.book import BookSearchResult, PlatformRating
 from api import platform_cache
+from .volume_service import collect_volumes
 
 CRAWLERS = {"aladin": AladinCrawler, "kyobo": KyoboCrawler, "yes24": Yes24Crawler, "sarak": SarakCrawler, "watcha": WatchaCrawler, "goodreads": GoodreadsCrawler, "amazon": AmazonCrawler, "librarything": LibraryThingCrawler}
 FOREIGN_PLATFORMS = {"goodreads", "amazon", "librarything"}
@@ -26,12 +27,12 @@ REASONS = {"not_found": "일치하는 책을 찾지 못했습니다", "identity_
 
 async def crawl_platform(crawler_cls, query, fallback_query=None, original_query=None, execution_id=None,
                          expected_author=None, on_failure=None, identity_title=None, identity_isbn=None,
-                         related_isbns=()):
+                         related_isbns=(), strict_edition=False):
     async def execute():
         async with crawler_cls() as crawler:
             crawler.set_session(uuid.uuid4().hex[:8], original_query or query, execution_id=execution_id)
             expected_title = identity_title or (fallback_query if fallback_query and not is_isbn(fallback_query) else (query if not is_isbn(query) else None))
-            crawler.expected_identity(expected_title, expected_author, strict_isbn=is_isbn(original_query or query))
+            crawler.expected_identity(expected_title, expected_author, strict_isbn=strict_edition or is_isbn(original_query or query))
             crawler._preferred_isbn = identity_isbn
             crawler._related_isbns = related_isbns if not is_isbn(original_query or query) else ()
             result = await crawler.crawl(query, attempt=1)
@@ -115,23 +116,32 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
                 source_query = query if platform in {"kyobo", "watcha"} else identity.isbn or query
                 if platform == "watcha":
                     source_query = identity.title or query
-                result = await asyncio.wait_for(crawl_platform(CRAWLERS[platform], source_query,
-                    fallback_query=query if source_query != query and platform != "watcha" else None, original_query=query,
-                    execution_id=execution_id, expected_author=identity.author, identity_title=identity.title,
-                    identity_isbn=identity.isbn,
-                    on_failure=failure.append), PLATFORM_TIMEOUT)
+                if platform in {'kyobo','aladin','yes24','sarak'} and len(identity.editions)>1:
+                    async def volume(edition,on_failure):
+                        return await crawl_platform(CRAWLERS[platform],edition['isbn'],
+                            original_query=query,execution_id=execution_id,expected_author=identity.author,
+                            identity_title=edition['title'],identity_isbn=edition['isbn'],strict_edition=True,on_failure=on_failure)
+                    result=await collect_volumes(platform,identity,volume,rating_dict,PLATFORM_TIMEOUT,failure.append)
+                else:
+                    result = await asyncio.wait_for(crawl_platform(CRAWLERS[platform], source_query,
+                        fallback_query=query if source_query != query and platform != "watcha" else None, original_query=query,
+                        execution_id=execution_id, expected_author=identity.author, identity_title=identity.title,
+                        identity_isbn=identity.isbn,
+                        on_failure=failure.append), PLATFORM_TIMEOUT)
             if result and ((result.rating is not None and result.review_count is not None) or result.rating_count == 0 or result.text_review_count == 0):
                 status = "done"
             elif failure:
                 status = failure[-1]
             elif result:
                 status = "parse_error"
+            if result and result.volume_results and not result.aggregate_complete:
+                status='parse_error'
         except asyncio.TimeoutError:
             status = "timeout"
         except Exception:
             logger.error("crawl_failed", "Platform lookup failed", {"platform": platform})
             status = "network_error"
-        reason = REASONS.get(status)
+        reason = result.edition_note if result and result.volume_results and not result.aggregate_complete else REASONS.get(status)
         if on_status:
             on_status({"platform": platform, "status": status, "reason": reason, "source": "crawl"})
         if cache:

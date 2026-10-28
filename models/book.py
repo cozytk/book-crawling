@@ -20,6 +20,11 @@ class PlatformRating:
     author: str | None = None
     edition_note: str | None = None
     comparison_scope: str = "work"
+    volume_results: list[dict] = field(default_factory=list)
+    aggregation_method: str | None = None
+    aggregate_complete: bool | None = None
+    publisher: str | None = None
+    translator: str | None = None
 
     def __post_init__(self):
         try:
@@ -67,6 +72,9 @@ class BookSearchResult:
                     "author": r.author,
                     "edition_note": r.edition_note,
                     "comparison_scope": r.comparison_scope,
+                    **({"volume_results":r.volume_results,"aggregation_method":r.aggregation_method,
+                        "aggregate_complete":r.aggregate_complete,"publisher":r.publisher,"translator":r.translator}
+                       if r.volume_results else {}),
                 }
                 for r in self.results
             ],

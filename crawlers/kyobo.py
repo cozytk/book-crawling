@@ -31,6 +31,16 @@ class KyoboCrawler(BaseHttpCrawler):
     rating_scale = 10
     user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+    @staticmethod
+    def _edition_metadata(item):
+        publisher=item.select_one('.prod_publish .text')
+        translators=[]
+        for writer in item.select('.prod_author_group a.author:not(.rep)'):
+            kind=writer.find_next('span',class_='type')
+            if kind and '번역' in kind.get_text():
+                translators.append(writer.get_text(' ',strip=True))
+        return publisher.get_text(' ',strip=True) if publisher else '', ', '.join(translators)
+
     def search_by_keyword(self, keyword: str) -> tuple[str | None, str]:
         """책 검색 - 검색 페이지 HTML 파싱"""
         transport=active_transport()
@@ -68,6 +78,7 @@ class KyoboCrawler(BaseHttpCrawler):
         self._search_rating = None
         self._search_review_count = 0
         self.discovery_candidates = []
+        self.series_sizes = []
 
         for item in items:
             # 책 제목 및 URL 추출
@@ -83,6 +94,9 @@ class KyoboCrawler(BaseHttpCrawler):
             book_url = title_elem.get("href", "")
             author_node = item.select_one(".prod_author_group .author.rep, .prod_author, .prod_author_info .author")
             candidate_author = author_node.get_text(" ", strip=True) if author_node else ""
+            role=author_node.find_next('span',class_='type') if author_node else None
+            if not is_isbn(keyword) and role and role.get_text(strip=True) in {'원작','원저'}:
+                continue
             if not is_isbn(keyword) and self._expected_author and (not candidate_author or not author_matches(self._expected_author, candidate_author)):
                 continue
 
@@ -96,8 +110,12 @@ class KyoboCrawler(BaseHttpCrawler):
                 continue
 
             # 세트/에디션 상품 제외
+            publisher,translator=self._edition_metadata(item)
             exclude_keywords = ["세트", "3종", "2종", "전집", "박스세트"]
             if not is_isbn(keyword) and any(kw in book_name and kw not in keyword for kw in exclude_keywords):
+                size=re.search(r'전\s*(\d{1,2})\s*권',item.get_text(' ',strip=True))
+                if size and title_score(keyword,re.sub('박스세트|세트|전집','',book_name).strip()):
+                    self.series_sizes.append({'publisher':publisher,'translator':translator,'total':int(size.group(1))})
                 continue
 
             score = candidate_score(keyword, book_name, candidate_author, self._expected_author)
@@ -119,6 +137,7 @@ class KyoboCrawler(BaseHttpCrawler):
                 count_match=re.search(r"[\d,]+",count_node.get_text()) if count_node else None
                 author_id=re.search(r"goClickSearchPage\('chrc',\s*[\"']([^\"']+)",author_node.get("onclick", "")) if author_node else None
                 self.discovery_candidates.append({"title":book_name,"url":book_url,"author":candidate_author,
+                    "publisher":publisher,"translator":translator,
                     "author_id":author_id.group(1) if author_id else None,"isbn":next(iter(structured_isbns(item)),None),
                     "reviews":int(count_match.group().replace(",","")) if count_match else 0,"score":score,
                     "rating":observed_rating,"count_observed":count_match is not None})

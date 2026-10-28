@@ -14,6 +14,8 @@ from crawlers.transport import fetch_sync
 import difflib
 import json
 import os
+import re
+import unicodedata
 import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
@@ -48,6 +50,20 @@ class ISBNProvider(ABC):
     name: str = "base"
     timeout: int = 10
 
+    @staticmethod
+    def query_author(title, author):
+        """Query one compatible alias; retain every alias for validation.
+
+        Shop metadata may contain Latin, Japanese and Chinese spellings of
+        one writer. Concatenating them turns alternatives into required terms.
+        """
+        names = author if isinstance(author, (list, tuple)) else [author] if author else []
+        aliases = [re.sub(r'\([^)]*\)', '', name).strip() for value in names
+                   for name in re.split(r'[,、，]', str(value)) if name.strip()]
+        scripts = lambda text: {unicodedata.name(c, '').split(' ')[0] for c in text if c.isalpha()}
+        title_scripts = scripts(title)
+        return next((name for name in aliases if scripts(name) & title_scripts), aliases[0] if aliases else '')
+
     @abstractmethod
     def search(self, title: str, author: str | None = None) -> ISBNResult | None:
         """
@@ -66,10 +82,10 @@ class ISBNProvider(ABC):
         """검색 쿼리 구성"""
         # 불필요한 공백 및 괄호 제거
         import re
-        clean_title = re.sub(r'[\(\):]', ' ', title).strip()
+        clean_title = re.sub(r"[\(\):'’]", ' ', title).strip()
         if author:
             # 저자명에서 '(지은이)', '(옮긴이)' 등 제거
-            clean_author = re.sub(r'\(.*?\)', '', author).replace(',', ' ').strip()
+            clean_author = self.query_author(title, author)
             return f"{clean_title} {clean_author}"
         return clean_title
 
@@ -130,7 +146,7 @@ class GoogleBooksProvider(ISBNProvider):
         clean_title = re.sub(r'[\(\):]', ' ', title).strip()
         search_query = f"intitle:\"{clean_title}\""
         if author:
-            clean_author = re.sub(r'\(.*?\)', '', author).split(',')[0].strip()
+            clean_author = self.query_author(title, author)
             if clean_author:
                 search_query += f" inauthor:\"{clean_author}\""
 

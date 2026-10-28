@@ -1,4 +1,4 @@
-from crawlers.transport import fetch_sync
+from crawlers.transport import fetch_sync, active_transport
 """Amazon Books HTTP 기반 크롤러"""
 
 import json
@@ -9,7 +9,7 @@ import urllib.request
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import is_isbn, title_score, book_node, valid_rating, count_number, isbn13, author_matches
+from .utils import is_isbn, title_score, book_node, valid_rating, count_number, isbn13, isbn_matches, author_matches, structured_isbns
 
 
 class AmazonCrawler(BaseHttpCrawler):
@@ -40,6 +40,10 @@ class AmazonCrawler(BaseHttpCrawler):
         response = fetch_sync(url, {"User-Agent": self.user_agent, "Accept-Language": "en-US,en;q=0.9",
             "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"})
         if response is not None:
+            transport=active_transport()
+            if transport:
+                soup=BeautifulSoup(response.text,"html.parser")
+                transport.diagnostics.setdefault(self.name,{})["page_title"]=soup.title.get_text(strip=True) if soup.title else None
             return response.text
         req = urllib.request.Request(url)
         headers = {
@@ -95,6 +99,63 @@ class AmazonCrawler(BaseHttpCrawler):
 
         return False
 
+    @staticmethod
+    def _star_value(text):
+        match=re.search(r"(\d+(?:\.\d+)?)\s*out of\s*5\s*stars?",text,re.I)
+        if not match:
+            match=re.search(r"별\s*5개\s*중\s*(\d+(?:\.\d+)?)",text)
+        return valid_rating(match.group(1),5) if match else None
+
+    def _card_rating(self, card, asin):
+        area=card.select_one('[data-cy="reviews-block"]') or card
+        popover=area.select_one('[data-a-popover]')
+        if popover:
+            try:
+                url=json.loads(popover['data-a-popover']).get('url','')
+                linked=urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get('asin',[asin])[0]
+                if linked!=asin:
+                    return None,None,None,None
+            except (ValueError,TypeError):
+                return None,None,None,None
+        score=next((value for node in area.select('.a-icon-alt, [aria-label]')
+                    if (value:=self._star_value(node.get('aria-label','')+' '+node.get_text(' ',strip=True))) is not None),None)
+        voters=written=display=None
+        for node in area.select('a[aria-label], a[href*="customerReviews"], a[href*="product-reviews"]'):
+            label=node.get('aria-label','')
+            match=re.fullmatch(r'\s*([\d,]+)\s*(?:global\s+)?(?:ratings?|개\s*평가)\s*',label,re.I)
+            if match:
+                voters=count_number(match.group(1))
+                break
+            match=re.fullmatch(r'\s*([\d,]+)\s*(?:customer\s+)?reviews?\s*',label,re.I)
+            if match:
+                written=count_number(match.group(1))
+            text=node.get_text(' ',strip=True).strip('() ')
+            if re.fullmatch(r'[\d,]+',text):
+                display=count_number(text)
+        return score,voters,written,display
+
+    def _verify_product(self, html, title, query):
+        soup=BeautifulSoup(html,'html.parser')
+        # Native ISBN rows are explicit product fields, not global page text.
+        for row in soup.select('#detailBullets_feature_div li, #productDetails_detailBullets_sections1 tr, #productDetailsTable tr'):
+            text=row.get_text(' ',strip=True)
+            if re.search(r'ISBN\s*[-–]?\s*1[03]',text,re.I):
+                text=re.split(r'ISBN\s*[-–]?\s*1[03]',text,maxsplit=1,flags=re.I)[-1]
+                match=re.search(r'(?<!\d)(?:97[89][-\d ]{10,16}|[\d-]{9,12}[\dX])(?!\d)',text)
+                if match:
+                    row['data-isbn']=match.group(0).strip()
+        expected=self._expected_title
+        if is_isbn(query or '') and isbn_matches(query,structured_isbns(soup)):
+            self._expected_title=None  # Explicit product ISBN proves translated titles too.
+        try:
+            verified=self.verify_detail(soup,title,query,allow_product=True)
+        finally:
+            self._expected_title=expected
+        if verified:
+            identifiers=[isbn13(value) for value in structured_isbns(soup) if is_isbn(str(value))]
+            self.book_isbn=next((value for value in identifiers if value==isbn13(query)),None) or next(iter(identifiers),None)
+        return verified
+
     def search_by_identifier(self, identifier: str) -> tuple[str | None, str]:
         """
         ASIN 또는 ISBN으로 직접 상세 페이지 접근
@@ -116,7 +177,7 @@ class AmazonCrawler(BaseHttpCrawler):
             return None, ""
 
         title, rating, review_count = self._parse_detail_page(html)
-        if title and self.verify_detail(BeautifulSoup(html, "html.parser"), title, identifier, allow_product=True):
+        if title and self._verify_product(html, title, identifier):
             if not is_isbn(identifier):
                 product = BeautifulSoup(html, "html.parser").select_one('input#ASIN, input[name="ASIN"]')
                 if not product or product.get("value", "").upper() != clean.upper():
@@ -135,7 +196,7 @@ class AmazonCrawler(BaseHttpCrawler):
         https://www.amazon.com/s?k={keyword}&i=stripbooks-intl-ship 형식으로 검색.
         """
         encoded = urllib.parse.quote(keyword)
-        search_url = f"https://www.amazon.com/s?k={encoded}&i=stripbooks"
+        search_url = f"https://www.amazon.com/s?k={encoded}&i=stripbooks&language=en_US"
 
         try:
             html = self._fetch_with_headers(search_url)
@@ -143,10 +204,18 @@ class AmazonCrawler(BaseHttpCrawler):
             return None, ""
 
         soup = BeautifulSoup(html, "html.parser")
+        transport=active_transport()
+        if transport:
+            transport.diagnostics.setdefault(self.name,{})['query']=keyword
 
         # 검색 결과에서 첫 번째 책 찾기
         # 방법 1: data-asin 속성이 있는 검색 결과
         candidates = soup.select('[data-component-type="s-search-result"]')
+        if transport:
+            transport.diagnostics[self.name]['candidates']=[{'asin':row.get('data-asin'),
+                'title':row.select_one('h2').get_text(' ',strip=True) if row.select_one('h2') else '',
+                'author':row.select_one('[data-cy="title-recipe"] .a-row, .a-row.a-size-base.a-color-secondary').get_text(' ',strip=True) if row.select_one('[data-cy="title-recipe"] .a-row, .a-row.a-size-base.a-color-secondary') else ''}
+                for row in candidates[:6]]
         candidates.sort(key=lambda result: title_score(keyword, result.select_one("h2").get_text(strip=True) if result.select_one("h2") else ""), reverse=True)
         for result in candidates:
             asin = result.get("data-asin", "")
@@ -163,19 +232,22 @@ class AmazonCrawler(BaseHttpCrawler):
             title = title_elem.get_text(strip=True)
             text = result.get_text(" ", strip=True)
             selected_format = re.split(r"Other formats?\s*:", text, maxsplit=1, flags=re.I)[0]
-            if not is_isbn(keyword) and re.search(r"\b(?:Audiobook|Audible)\b", selected_format, re.I) and not re.search(r"audio|audible", keyword, re.I):
+            primary_format=result.select_one('[data-cy="price-recipe"] a.a-text-bold')
+            if primary_format:
+                selected_format=primary_format.get_text(' ',strip=True)
+            if not is_isbn(keyword) and re.search(r"\b(?:Audiobook|Audible)\b|오디오북", selected_format, re.I) and not re.search(r"audio|audible|오디오북", keyword, re.I):
                 continue
             # Explicit byline on modern search cards; detail is still verified.
             byline = result.select_one('[data-cy="title-recipe"] .a-row:not(.a-size-medium), .a-row.a-size-base.a-color-secondary')
             if self._expected_author and byline and not author_matches(self._expected_author, byline.get_text(" ", strip=True)):
                 continue
             if is_isbn(keyword):
-                if not (asin.isdigit() and isbn13(asin) == isbn13(keyword)):
+                if not (is_isbn(asin) and isbn13(asin) == isbn13(keyword)):
                     if str(keyword).startswith("979"):
                         try:
                             detail_html = self._fetch_with_headers(f"https://www.amazon.com/dp/{asin}")
                             detail_title, detail_rating, detail_count = self._parse_detail_page(detail_html)
-                            if self.verify_detail(BeautifulSoup(detail_html, "html.parser"), detail_title, keyword, allow_product=True):
+                            if self._verify_product(detail_html, detail_title, keyword):
                                 self._cached_rating, self._cached_review_count = detail_rating, detail_count
                                 self._rating_loaded = True
                                 return f"https://www.amazon.com/dp/{asin}", detail_title
@@ -186,26 +258,19 @@ class AmazonCrawler(BaseHttpCrawler):
                 continue
             book_url = f"https://www.amazon.com/dp/{asin}"
 
-            # 검색 결과에서 평점 미리 추출 (가능한 경우)
-            rating_elem = result.select_one('span[aria-label*="out of 5 stars"]')
-            if rating_elem:
-                aria = rating_elem.get("aria-label", "")
-                match = re.search(r"([\d.]+)\s*out of\s*5", aria)
-                if match:
-                    self._cached_rating = valid_rating(match.group(1), 5)
-
-            review_elem = result.select_one('a[href*="product-reviews"] span, a[href*="customerReviews"] span')
-            if not review_elem:
-                review_elem = result.select_one('a[href*="customerReviews"] span')
-            if review_elem:
-                text = review_elem.get_text(strip=True)
-                match = re.search(r"([\d,]+)", text)
-                if match:
-                    self._cached_review_count = int(match.group(1).replace(",", ""))
-                    self.rating_count = self._cached_review_count
-
-            if self._expected_author:
-                self._cached_rating = None  # Fetch detail to verify the known author.
+            score,voters,written,display=self._card_rating(result,asin)
+            verified=not self._expected_author or bool(byline and author_matches(self._expected_author,byline.get_text(' ',strip=True)))
+            self._cached_rating=score if verified else None
+            self.rating_count=voters if verified else None
+            self.text_review_count=written if verified else None
+            self._cached_review_count=voters if voters is not None else written if written is not None else display
+            self.count_observed=verified and self._cached_review_count is not None
+            if verified and byline:
+                self.book_author=byline.get_text(' ',strip=True)
+            if is_isbn(asin):
+                self.book_isbn=isbn13(asin)
+            if transport:
+                transport.diagnostics[self.name].update({'asin':asin,'method':'verified_search_card' if verified and score is not None else 'detail_required'})
             self._rating_loaded = self._cached_rating is not None
             self._selected_title = title
             return book_url, title
@@ -286,7 +351,7 @@ class AmazonCrawler(BaseHttpCrawler):
 
         title, rating, review_count = self._parse_detail_page(html)
         expected = self._expected_title or getattr(self, "_selected_title", None)
-        if not self.verify_detail(BeautifulSoup(html, "html.parser"), title, expected, allow_product=True):
+        if not self._verify_product(html, title, expected):
             return None, 0
         self._rating_loaded = True
         self.logger.rating_complete(rating, review_count, method="json-ld", rating_scale=self.rating_scale)

@@ -110,12 +110,24 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
 
     if original_title:
         # 알라딘에 원서 제목 있음 → 원서 제목으로 ISBN 조회
-        candidate = lookup.search(original_title, original_author)
+        primary = re.split(r"[:：]", original_title, maxsplit=1)[0].strip()
+        # The author is verified from the selected ISBN. Try the main title
+        # first so descriptive subtitles do not add two failed catalog calls.
+        first_title=primary if original_author else original_title
+        candidate = lookup.search(first_title, original_author)
         # A verified edition supplies the original title and writer. Its
         # descriptive subtitle is not required on another edition of that work.
-        primary = re.split(r"[:：]", original_title, maxsplit=1)[0].strip()
-        if not candidate and primary != original_title and original_author:
-            candidate = lookup.search(primary, original_author)
+        if not candidate and first_title != original_title:
+            candidate = lookup.search(original_title, original_author)
+        # The original title may be a translation not indexed by the search
+        # catalog (e.g. French title of a Czech work). A verified local ISBN
+        # can still establish the Edition -> Work connection.
+        if not candidate and isbn13:
+            original=lookup.find_original(isbn=isbn13)
+            if original and original.get('isbn') and not _is_korean(original.get('title','')):
+                return ForeignQuery(query=original['title'],isbn=original['isbn'],
+                    author=original.get('authors') or re.split(r'[,、，]',original_author or ''),
+                    related_isbns=original.get('related_isbns',()))
         foreign_isbn = candidate.isbn if candidate else None
         if foreign_isbn:
             logger.debug(f"원서 연결: {original_title} → ISBN {foreign_isbn}")

@@ -99,7 +99,8 @@ class SearchTransport:
                     if domain == "www.librarything.com" and urlsplit(url).path == "/api/json/workinfo.js":
                         await asyncio.sleep(librarything_api_delay())
                     self.counts[domain] += 1
-                    if self.use_browser_http and domain in {"pedia.watcha.com", "www.goodreads.com"}:
+                    browser_http = domain in {"pedia.watcha.com", "www.goodreads.com"} or (domain == "www.amazon.com" and urlsplit(url).path == "/s")
+                    if self.use_browser_http and browser_http:
                         from curl_cffi.requests import AsyncSession
                         from curl_cffi.requests.exceptions import Timeout, RequestException
                         if self.browser_client is None:
@@ -139,6 +140,9 @@ class SearchTransport:
                 text = response.content.decode("utf-8")
             except UnicodeDecodeError:
                 text = response.content.decode("cp949", errors="replace")
+            if domain == "www.amazon.com" and (urlsplit(str(response.url)).path.startswith("/checkpoint/")
+                    or "<title>Robot Check" in text[:10000] or 'action="/errors/validateCaptcha"' in text[:20000]):
+                raise FetchFailure("blocked")
             if any(marker in text[:10000].lower() for marker in ("/cdn-cgi/challenge-platform", "performing security verification", "validatecaptcha", "awswafcookiedomainlist", "awswafintegration")):
                 raise FetchFailure("blocked")
             return PageResponse(text, str(response.url))

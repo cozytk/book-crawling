@@ -54,6 +54,13 @@ def edition_preference(query, title):
     return -min(int(match.group(1)), 99) if match else 0
 
 
+def volume_info(title):
+    """Explicit trailing volume labels; a numeric work title is not a volume."""
+    main=re.split(r'\s[-–—]\s|[:：]',title,maxsplit=1)[0].strip()
+    match=re.match(r'^(.*?)\s*(?:\s|[.(（])([1-9]\d?|[상중하])\s*(?:권|부|편)?\s*[)）]?\s*(?:\([^)]*\))?$',main)
+    return (match.group(1).strip(' .('),match.group(2)) if match else (title,None)
+
+
 def title_score(query: str, title: str) -> float:
     """Identity gates precede ranking; subtitles cannot hide a derivative work."""
     def normalize(value):

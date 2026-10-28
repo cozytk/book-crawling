@@ -13,10 +13,28 @@ export interface PlatformRating {
   isbn?: string | null;
   author?: string | null;
   edition_note?: string | null;
-  comparison_scope?: "work" | "edition";
+  comparison_scope?: "work" | "edition" | "volume_group";
+  volume_results?: VolumeRating[];
+  aggregation_method?: string | null;
+  aggregate_complete?: boolean | null;
+  publisher?: string | null;
+  translator?: string | null;
   book_title: string;
   url: string;
   crawled_at: string;
+}
+
+export interface VolumeRating {
+  volume: string;
+  book_title: string;
+  isbn?: string | null;
+  url?: string;
+  rating: number | null;
+  rating_scale?: number;
+  rating_count?: number | null;
+  text_review_count?: number | null;
+  review_count?: number | null;
+  status: string;
 }
 
 export interface SearchResult {
