@@ -3,6 +3,7 @@ import json
 import pytest
 
 from crawlers.goodreads import GoodreadsCrawler
+from crawlers.utils import candidate_score
 
 
 def book(**changes):
@@ -55,3 +56,12 @@ def test_explicit_isbn_fallback_does_not_use_work_only_autocomplete(monkeypatch)
     monkeypatch.setattr(result,'_fetch_with_redirect',fetch)
     assert result.search_by_keyword('Hamlet')==(None,'')
     assert all('/auto_complete' not in url for url in calls)
+
+
+def test_catalog_article_alias_requires_matching_author_and_preserves_gates():
+    assert candidate_score('Miserables','Les Miserables','Victor Hugo','Victor Hugo')
+    assert candidate_score('Stranger','The Stranger','Albert Camus','Albert Camus')
+    assert not candidate_score('Miserables','Les Miserables','Other Author','Victor Hugo')
+    assert not candidate_score('Miserables','Les Miserables','Victor Hugo')
+    assert not candidate_score('Miserables','Les Miserables Study Guide','Victor Hugo','Victor Hugo')
+    assert not candidate_score('Les Miserables 1','Miserables 2','Victor Hugo','Victor Hugo')

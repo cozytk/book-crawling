@@ -40,6 +40,17 @@ def candidate_score(query, title, author="", expected_author=None):
     score = title_score(query, title)
     if score or not author:
         return score
+    if expected_author:
+        # Catalogs sometimes omit a leading grammatical article. This alias
+        # requires independently matching author metadata, and reuses every
+        # derivative/volume gate in title_score rather than fuzzy containment.
+        article = r"^(?:(?:the|a|an|le|la|les|un|une)\s+|l['’])"
+        bare_query = re.sub(article, '', query.strip(), flags=re.I)
+        bare_title = re.sub(article, '', title.strip(), flags=re.I)
+        if (bare_query != query.strip() or bare_title != title.strip()) and len(bare_query) >= 4:
+            score = title_score(bare_query, bare_title)
+            if score:
+                return score
     # "title author" and "author title" are supported only when the removed
     # words occur in this candidate's actual author metadata.
     author_words = set(re.findall(r"[\w]+", str(author).casefold())) - {"저", "역", "지은이", "옮긴이"}
