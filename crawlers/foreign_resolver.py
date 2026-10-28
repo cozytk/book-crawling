@@ -11,12 +11,14 @@
 
 from dataclasses import dataclass
 import asyncio
+import re
 
 from crawler_logging import CrawlerLogger
 from crawlers.aladin import AladinCrawler
 from crawlers.isbn_lookup import ISBNLookup
 from crawlers.utils import is_isbn, clean_isbn
 from crawlers.transport import run_parser
+from crawlers.yes24 import original_author_for_isbn
 
 logger = CrawlerLogger("foreign_resolver")
 
@@ -31,7 +33,7 @@ class ForeignQuery:
     """
     query: str | None = None
     isbn: str | None = None
-    author: str | None = None
+    author: str | list[str] | None = None
 
     @property
     def available(self) -> bool:
@@ -70,33 +72,45 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
     if is_isbn(korean_query):
         isbn = clean_isbn(korean_query)
         return ForeignQuery(query=isbn, isbn=isbn)
-    if not _is_korean(korean_query):
-        # 영문 검색어도 ISBN을 찾아두면 해외 플랫폼(특히 LibraryThing) 정확도가 올라감
-        lookup = ISBNLookup()
-        candidate = lookup.search(korean_query)
-        isbn = candidate.isbn if candidate else None
-        if isbn:
-            logger.debug(f"영문 검색어 ISBN 연결: {korean_query} → {isbn}")
-        return ForeignQuery(query=korean_query, isbn=isbn, author=", ".join(candidate.authors) if candidate else None)
-
     info = await _get_original_info(korean_query)
     if not info:
+        if not _is_korean(korean_query):
+            candidate = ISBNLookup().search(korean_query)
+            return ForeignQuery(query=candidate.title if candidate else korean_query,
+                                isbn=candidate.isbn if candidate else None,
+                                author=candidate.authors if candidate else None)
         return ForeignQuery()
 
     original_title = info.get("title")
     original_author = info.get("author")
     isbn13 = info.get("isbn13")
     lookup = ISBNLookup()
+    # Author names copied from the verified Korean edition provide a query in
+    # the original script. Never take an unrelated first shop/search result.
+    try:
+        original_author = original_author_for_isbn(isbn13, original_author) or original_author
+    except Exception:
+        pass
 
     if original_title:
         # 알라딘에 원서 제목 있음 → 원서 제목으로 ISBN 조회
         candidate = lookup.search(original_title, original_author)
+        # A verified edition supplies the original title and writer. Its
+        # descriptive subtitle is not required on another edition of that work.
+        primary = re.split(r"[:：]", original_title, maxsplit=1)[0].strip()
+        if not candidate and primary != original_title and original_author:
+            candidate = lookup.search(primary, original_author)
         foreign_isbn = candidate.isbn if candidate else None
         if foreign_isbn:
             logger.debug(f"원서 연결: {original_title} → ISBN {foreign_isbn}")
         else:
             logger.debug(f"원서 연결 (ISBN 없음): {original_title}")
-        return ForeignQuery(query=original_title, isbn=foreign_isbn, author=", ".join(candidate.authors) if candidate else original_author)
+        query = candidate.title if candidate else primary
+        # Keep a concise known title when the provider only adds a subtitle.
+        if candidate and primary.casefold() == re.split(r"[:：]", candidate.title, maxsplit=1)[0].strip().casefold():
+            query = primary
+        return ForeignQuery(query=query, isbn=foreign_isbn,
+                            author=candidate.authors if candidate else re.split(r"[,、，]", original_author or ""))
 
     if isbn13:
         # 원서 제목 없음 → 외부 API에서 원서 정보 조회
@@ -109,6 +123,6 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
                 logger.debug(f"원서 연결: {query} → ISBN {isbn}")
             else:
                 logger.debug(f"원서 연결 (ISBN 없음): {query}")
-            return ForeignQuery(query=query, isbn=isbn, author=", ".join(authors))
+            return ForeignQuery(query=query, isbn=isbn, author=authors or original_author)
 
     return ForeignQuery()

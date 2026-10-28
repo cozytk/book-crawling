@@ -110,11 +110,11 @@ def test_amazon_isbn13_maps_to_isbn10_and_ignores_individual_review():
 
 async def test_watcha_title_metadata_and_book_type_are_checked():
     crawler = WatchaCrawler()
-    html = '<a href="/ko/contents/ab12">데미안 2020 ・ 헤르만 헤세</a>'
+    html = '<a href="/ko/contents/bo12">데미안 2020 ・ 헤르만 헤세 책</a>'
     with patch.object(crawler, "_fetch_html", return_value=html):
         assert crawler.search_by_keyword("데미안")[1] == "데미안"
     with patch.object(crawler, "_fetch_html", return_value=detail(kind="Movie", name="데미안")):
-        assert await crawler.get_rating("https://pedia.watcha.com/ko/contents/ab12") == (None, 0)
+        assert await crawler.get_rating("https://pedia.watcha.com/ko/contents/bo12") == (None, 0)
 
 
 async def test_async_http_deduplicates_and_limits_domain_concurrency():
@@ -220,7 +220,7 @@ async def test_aladin_domestic_and_foreign_share_search_and_detail(monkeypatch):
                 "subInfo": {"originalTitle": "Demian", "ratingInfo": {"ratingScore": 8.8, "ratingCount": 456}}}
         await asyncio.sleep(.01)
         return httpx.Response(200, json={"item": [item]})
-    with patch("crawlers.foreign_resolver.ISBNLookup.search", return_value=None):
+    with patch("crawlers.foreign_resolver.ISBNLookup.search", return_value=None), patch("crawlers.foreign_resolver.original_author_for_isbn", return_value=None):
         async with SearchTransport(httpx.AsyncClient(transport=httpx.MockTransport(handler))) as transport:
             domestic, foreign = await asyncio.gather(crawler_service.crawl_platform(AladinCrawler, "데미안"), resolve_foreign_query("데미안"))
             assert domestic.rating == 8.8 and foreign.query == "Demian"

@@ -11,6 +11,7 @@ from itertools import islice
 from uuid import uuid4
 
 from vercel.blob import sync as blob
+from api.platform_cache import SCHEMA_VERSION
 
 
 class BlobStore:
@@ -19,15 +20,15 @@ class BlobStore:
     @staticmethod
     def _cache_path(query):
         key = hashlib.sha256(query.casefold().encode()).hexdigest()
-        return f"v4/cache/{key}.json"
+        return f"v{SCHEMA_VERSION}/cache/{key}.json"
 
     def platform_cached(self, query, platform):
         key = hashlib.sha256(query.casefold().encode()).hexdigest()
-        return self._read(f"v4/platforms/{platform}/{key}.json")
+        return self._read(f"v{SCHEMA_VERSION}/platforms/{platform}/{key}.json")
 
     def cache_platform(self, query, platform, value):
         key = hashlib.sha256(query.casefold().encode()).hexdigest()
-        self._write(f"v4/platforms/{platform}/{key}.json", value, overwrite=True)
+        self._write(f"v{SCHEMA_VERSION}/platforms/{platform}/{key}.json", value, overwrite=True)
 
     def _read(self, path):
         try:
@@ -44,7 +45,7 @@ class BlobStore:
     def save(self, query, results, platforms=None):
         from api.db import summarize
         now = datetime.now(timezone.utc)
-        search = {"schema_version": 4, "id": str(uuid4()), "query": query, "created_at": now.isoformat(),
+        search = {"schema_version": SCHEMA_VERSION, "id": str(uuid4()), "query": query, "created_at": now.isoformat(),
                   "requested_platforms": platforms or [], **summarize(results)}
         payload = {"search": search, "ratings": results}
         # Alphabetical listing puts the newest immutable records first.

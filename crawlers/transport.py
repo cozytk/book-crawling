@@ -49,8 +49,10 @@ class Scope:
 
 
 class SearchTransport:
-    def __init__(self, client=None):
+    def __init__(self, client=None, browser_client=None):
         self.loop = asyncio.get_running_loop()
+        self.use_browser_http = client is None or browser_client is not None
+        self.browser_client = browser_client
         self.client = client or httpx.AsyncClient(follow_redirects=False, timeout=httpx.Timeout(8, connect=4),
                                                  limits=httpx.Limits(max_connections=20, max_keepalive_connections=12))
         self.requests = {}
@@ -71,6 +73,8 @@ class SearchTransport:
                 task.cancel()
         await asyncio.gather(*self.requests.values(), return_exceptions=True)
         await self.client.aclose()
+        if self.browser_client is not None:
+            await self.browser_client.close()
 
     async def _request(self, url, headers):
         for _ in range(6):
@@ -79,7 +83,23 @@ class SearchTransport:
             try:
                 async with semaphore:
                     self.counts[domain] += 1
-                    response = await self.client.get(url, headers=headers, follow_redirects=False)
+                    if self.use_browser_http and domain == "pedia.watcha.com":
+                        from curl_cffi.requests import AsyncSession
+                        from curl_cffi.requests.exceptions import Timeout, RequestException
+                        if self.browser_client is None:
+                            self.browser_client = AsyncSession(impersonate="chrome", timeout=8)
+                        try:
+                            page = await self.browser_client.get(url, headers=headers, allow_redirects=False)
+                        except Timeout:
+                            raise FetchFailure("timeout") from None
+                        except RequestException:
+                            raise FetchFailure("network_error") from None
+                        response_headers = {k: v for k, v in page.headers.items()
+                                            if k.lower() not in {"content-encoding", "content-length"}}
+                        response = httpx.Response(page.status_code, content=page.content, headers=response_headers,
+                                                  request=httpx.Request("GET", str(page.url)))
+                    else:
+                        response = await self.client.get(url, headers=headers, follow_redirects=False)
             except httpx.TimeoutException:
                 raise FetchFailure("timeout") from None
             except httpx.HTTPError:

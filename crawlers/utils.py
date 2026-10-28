@@ -5,6 +5,50 @@ import math
 import re
 import unicodedata
 
+# Name variants observed in the source catalogs. These map people, never scores.
+AUTHOR_ALIASES = {
+    "tolstoy": ("레프 니콜라예비치 톨스토이", "레프 톨스토이", "Leo Tolstoy", "Lev Tolstoy", "Лев Толстой", "Л. Н. Толстой"),
+    "maugham": ("서머싯 몸", "서머셋 몸", "서머셋 모옴", "서머싯 모옴", "Somerset Maugham"),
+}
+
+
+def author_keys(value):
+    normalize = lambda text: "".join(c for c in unicodedata.normalize("NFKC", str(text)).casefold() if c.isalpha())
+    text = normalize(" ".join(value) if isinstance(value, list) else value)
+    return {key for key, aliases in AUTHOR_ALIASES.items() if any(normalize(alias) in text for alias in aliases)}
+
+
+def bilingual_titles(value):
+    """Accept explicit alternate-script titles, not arbitrary subtitle fragments."""
+    parts = re.split(r"\s[/=-]\s", value)
+    def scripts(part):
+        return {unicodedata.name(c, "").split(" ")[0] for c in part if c.isalpha()}
+    if len(parts) > 1 and len({tuple(sorted(scripts(p))) for p in parts}) > 1:
+        return parts
+    return [value]
+
+
+def candidate_score(query, title, author="", expected_author=None):
+    if expected_author and (not author or not author_matches(expected_author, author)):
+        return 0.0
+    score = title_score(query, title)
+    if score or not author:
+        return score
+    # "title author" and "author title" are supported only when the removed
+    # words occur in this candidate's actual author metadata.
+    author_words = set(re.findall(r"[\w]+", str(author).casefold())) - {"저", "역", "지은이", "옮긴이"}
+    words = query.split()
+    remaining = [w for w in words if w.casefold() not in author_words]
+    return title_score(" ".join(remaining), title) if remaining != words and remaining else 0.0
+
+
+def edition_preference(query, title):
+    """Within a verified work, prefer volume 1 when no volume was requested."""
+    if re.search(r"\d|(?<![가-힣])[상중하](?![가-힣])", query):
+        return 0
+    match = re.search(r"(?:\s|\()(\d{1,2})\s*(?:권|부|편)?(?:\)|\s|$)", title)
+    return -min(int(match.group(1)), 99) if match else 0
+
 
 def title_score(query: str, title: str) -> float:
     """Identity gates precede ranking; subtitles cannot hide a derivative work."""
@@ -15,8 +59,9 @@ def title_score(query: str, title: str) -> float:
     q, t = normalize(query), normalize(title)
     if not q or not t:
         return 0.0
-    derivatives = [r"해설", r"워크북", r"문제집", r"독후감", r"요약", r"만화", r"어린이", r"청소년",
-                   r"\bworkbook\b", r"\bstudy guide\b", r"\bsummary\b", r"\babridged\b", r"\badapted\b"]
+    derivatives = [r"해설", r"워크북", r"문제집", r"독후감", r"요약", r"만화", r"그래픽\s*노[블벨]", r"어린이", r"청소년",
+                   r"\bworkbook\b", r"\bstudy guide\b", r"\bsummary\b", r"\babridged\b", r"\badapted\b",
+                   r"\bgraphic novel\b", r"\bretold\b", r"\bgraded reader\b"]
     if any(bool(re.search(pattern, query, re.I)) != bool(re.search(pattern, title, re.I)) for pattern in derivatives):
         return 0.0
     def volumes(value):
@@ -36,6 +81,14 @@ def title_score(query: str, title: str) -> float:
         return 0.98
     if q == normalize(re.sub(r"\([^)]*\)|\[[^]]*\]", "", title)):
         return 0.96
+    # An unspecified work may be sold in several volumes. A requested volume
+    # still passes the explicit volume/number gates above (1 must not match 10).
+    if not re.search(r"\d", query) and not volumes(query):
+        main = re.split(r"\s[-–—]\s|[:：]", title)[0]
+        main = re.sub(r"\s*\([^)]*\)|\[[^]]*\]", "", main).strip()
+        without_volume = re.sub(r"\s+(?:[1-9]\d?|[상중하])\s*(?:권|부|편)?$", "", main)
+        if q == normalize(without_volume):
+            return 0.94
     if re.search(r"[a-zA-Z]", query):
         words = re.findall(r"[a-z0-9]+", query.casefold())
         title_words = set(re.findall(r"[a-z0-9]+", title.casefold()))
@@ -138,14 +191,28 @@ def book_node(soup, title, allow_product=False):
     return None
 
 
-def author_matches(expected, actual):
+def author_matches(expected, actual, strict_script=False):
     """Only compare compatible scripts; never infer translated-name aliases."""
     if not expected or not actual:
         return True
+    if isinstance(expected, (list, tuple)):
+        return any(author_matches(name, actual, strict_script=True) for name in expected if name)
     expected_text = " ".join(expected) if isinstance(expected, list) else str(expected)
     actual_text = " ".join(actual) if isinstance(actual, list) else str(actual)
+    left_keys, right_keys = author_keys(expected_text), author_keys(actual_text)
+    if left_keys and right_keys:
+        return bool(left_keys & right_keys)
+    def scripts(text):
+        return {unicodedata.name(c, "").split(" ")[0] for c in text if c.isalpha()}
+    if strict_script and not scripts(expected_text) & scripts(actual_text):
+        return False
     if bool(re.search(r"[가-힣]", expected_text)) != bool(re.search(r"[가-힣]", actual_text)):
-        return True
+        return not strict_script and not left_keys
+    if re.search(r"[가-힣]", expected_text):
+        compact = lambda value: "".join(re.findall(r"[가-힣]", value))
+        left_name, right_name = compact(expected_text), compact(actual_text)
+        if len(left_name) >= 3 and left_name in right_name:
+            return True
     normalize = lambda s: set(re.findall(r"[a-z가-힣]+", s.casefold())) - {"by", "author", "지은이", "옮긴이"}
     left, right = normalize(expected_text), normalize(actual_text)
     return len(left & right) >= min(2, len(left), len(right)) if left and right else True

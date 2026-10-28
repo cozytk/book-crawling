@@ -7,6 +7,7 @@ from datetime import datetime
 from crawler_logging import CrawlerLogger
 from crawlers import AladinCrawler, KyoboCrawler, Yes24Crawler, SarakCrawler, WatchaCrawler, GoodreadsCrawler, AmazonCrawler, LibraryThingCrawler
 from crawlers.foreign_resolver import resolve_foreign_query
+from crawlers.work_identity import resolve_work_identity, WorkIdentity
 from crawlers.transport import SearchTransport, run_parser
 from crawlers.utils import is_isbn
 from models.book import BookSearchResult, PlatformRating
@@ -24,11 +25,11 @@ REASONS = {"not_found": "일치하는 책을 찾지 못했습니다", "identity_
 
 
 async def crawl_platform(crawler_cls, query, fallback_query=None, original_query=None, execution_id=None,
-                         expected_author=None, on_failure=None):
+                         expected_author=None, on_failure=None, identity_title=None):
     async def execute():
         async with crawler_cls() as crawler:
             crawler.set_session(uuid.uuid4().hex[:8], original_query or query, execution_id=execution_id)
-            expected_title = fallback_query if fallback_query and not is_isbn(fallback_query) else (query if not is_isbn(query) else None)
+            expected_title = identity_title or (fallback_query if fallback_query and not is_isbn(fallback_query) else (query if not is_isbn(query) else None))
             crawler.expected_identity(expected_title, expected_author, strict_isbn=is_isbn(original_query or query))
             result = await crawler.crawl(query, attempt=1)
             if result is None and fallback_query and fallback_query != query and not is_isbn(original_query or ""):
@@ -58,10 +59,11 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
     selected = list(dict.fromkeys(platforms if platforms is not None else CRAWLERS))
     execution_id = uuid.uuid4().hex[:8]
     foreign_task = None
+    identity_task = None
     cache_writes = []
 
     async def run(platform):
-        nonlocal foreign_task
+        nonlocal foreign_task, identity_task
         failure = []
         result = None
         status = "not_found"
@@ -83,8 +85,22 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
                         foreign.query if foreign.isbn else None, original_query=query, execution_id=execution_id,
                         expected_author=foreign.author, on_failure=failure.append), PLATFORM_TIMEOUT)
             else:
-                result = await asyncio.wait_for(crawl_platform(CRAWLERS[platform], query, original_query=query,
-                    execution_id=execution_id, on_failure=failure.append), PLATFORM_TIMEOUT)
+                if identity_task is None:
+                    identity_task = asyncio.create_task(resolve_work_identity(query))
+                try:
+                    identity = await asyncio.wait_for(asyncio.shield(identity_task), 3)
+                except Exception:
+                    identity = WorkIdentity()
+                # Reuse the catalog's edition identifier where supported. If
+                # that edition is unavailable, retry the title under the same
+                # author constraint. Watcha uses a title-based book catalog.
+                source_query = query if platform in {"aladin", "watcha"} else identity.isbn or query
+                if platform == "watcha":
+                    source_query = identity.title or query
+                result = await asyncio.wait_for(crawl_platform(CRAWLERS[platform], source_query,
+                    fallback_query=query if source_query != query and platform != "watcha" else None, original_query=query,
+                    execution_id=execution_id, expected_author=identity.author, identity_title=identity.title,
+                    on_failure=failure.append), PLATFORM_TIMEOUT)
             if result and ((result.rating is not None and result.review_count is not None) or result.rating_count == 0 or result.text_review_count == 0):
                 status = "done"
             elif failure:
@@ -113,7 +129,7 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
         if cache_writes:
             await asyncio.gather(*cache_writes, return_exceptions=True)
     finally:
-        pending = tasks + ([foreign_task] if foreign_task else []) + cache_writes
+        pending = tasks + ([foreign_task] if foreign_task else []) + ([identity_task] if identity_task else []) + cache_writes
         for task in pending:
             if not task.done():
                 task.cancel()

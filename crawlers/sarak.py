@@ -47,6 +47,7 @@ class SarakCrawler(BaseHttpCrawler):
         """
         from .yes24 import Yes24Crawler
         identifier = Yes24Crawler()
+        identifier.expected_identity(self._expected_title, self._expected_author, self._strict_isbn)
         identifier._fetch_html = self._fetch_html
         url, title = identifier.search_by_keyword(keyword)
         product_id = self._extract_product_id(url or "")

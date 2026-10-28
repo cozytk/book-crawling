@@ -1,4 +1,4 @@
-from crawlers.transport import fetch_sync
+from crawlers.transport import fetch_sync, FetchFailure
 """LibraryThing HTTP 기반 크롤러 (cloudscraper 사용)"""
 
 import base64
@@ -40,6 +40,7 @@ class LibraryThingCrawler(BaseHttpCrawler):
         
         self._cached_rating: float | None = None
         self._cached_review_count: int = 0
+        self._site_blocked = False
 
     def _fetch_with_scraper(
         self,
@@ -54,7 +55,13 @@ class LibraryThingCrawler(BaseHttpCrawler):
         if is_xhr:
             headers["X-Requested-With"] = "XMLHttpRequest"
 
-        shared = fetch_sync(url, {"User-Agent": self.user_agent})
+        if self._site_blocked:
+            raise FetchFailure("blocked")
+        try:
+            shared = fetch_sync(url, {"User-Agent": self.user_agent})
+        except FetchFailure as exc:
+            self._site_blocked = exc.status == "blocked"
+            raise
         if shared is not None:
             return shared.text, shared.url
         response = self._scraper.get(
@@ -208,8 +215,10 @@ class LibraryThingCrawler(BaseHttpCrawler):
 
     def _search_via_search_page(self, keyword: str) -> tuple[str | None, str]:
         """검색 페이지를 통한 검색 및 폴백"""
+        if self._site_blocked:
+            return self._search_via_fallback(keyword)
         encoded = urllib.parse.quote(keyword)
-        search_url = f"{self.base_url}/search.php?term={encoded}&searchtype=newwork_titles&sortchoice=0"
+        search_url = f"{self.base_url}/search.php?search={encoded}&searchtype=newwork_titles&sortchoice=0"
         
         html = self._fetch_search_results(search_url)
         link = self._find_link_in_html(html, keyword)
@@ -223,7 +232,7 @@ class LibraryThingCrawler(BaseHttpCrawler):
             if primary != keyword:
                 self.logger.debug(f"주제목으로 재시도: {primary}")
                 encoded_primary = urllib.parse.quote(primary)
-                search_url = f"{self.base_url}/search.php?term={encoded_primary}&searchtype=newwork_titles&sortchoice=0"
+                search_url = f"{self.base_url}/search.php?search={encoded_primary}&searchtype=newwork_titles&sortchoice=0"
                 html = self._fetch_search_results(search_url)
                 link = self._find_link_in_html(html, primary)
                 if not link:
@@ -422,6 +431,19 @@ class LibraryThingCrawler(BaseHttpCrawler):
         rating = valid_rating(aggregate.get("ratingValue"), 5, aggregate.get("bestRating"))
         self.rating_count = count_number(aggregate.get("ratingCount"))
         self.text_review_count = count_number(aggregate.get("reviewCount"))
+        # Current header scoreboard: do not scan prices or member-review text.
+        header = heading.find_parent(class_="pagecard") if heading else None
+        scoreboard = header.select_one(".lt_scoreboard") if header else None
+        if scoreboard:
+            widget = scoreboard.select_one(".scoreboard_item .rating[title]")
+            if widget:
+                match = re.search(r"\((\d+(?:\.\d+)?)\)", widget.parent.get_text(" ", strip=True))
+                if match:
+                    rating = valid_rating(match.group(1), 5)
+            for item in scoreboard.select(".scoreboard_item"):
+                match = re.fullmatch(r"\s*([\d,]+)\s+Reviews?\s*", item.get_text(" ", strip=True), re.I)
+                if match:
+                    self.text_review_count = count_number(match.group(1))
         stats = soup.select_one('[itemprop="aggregateRating"], #bookstats, #bookrating, #ratingstats, .bookstats')
         if stats:
             score = stats.select_one('[itemprop="ratingValue"]')

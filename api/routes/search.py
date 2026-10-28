@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator, ValidationError
 from api.db import get_client, find_cached_search, save_search_result, get_all_searches, get_saved_search, summarize
 from api.services.crawler_service import CRAWLERS, crawl_all, crawl_all_stream, get_available_platforms
 from api.services.ai_service import generate_book_description, generate_book_description_stream
+from api.platform_cache import SCHEMA_VERSION
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ def cached_for(client, query, platforms=None):
         return None
     selected = set(platforms if platforms is not None else CRAWLERS)
     found = {r["platform"] for r in cached["ratings"]}
-    if cached["search"].get("schema_version") != 4 or not selected.issubset(found):
+    if cached["search"].get("schema_version") != SCHEMA_VERSION or not selected.issubset(found):
         return None
     if any(r.get("normalized_rating") is None or r.get("review_count") is None for r in cached["ratings"] if r["platform"] in selected):
         return None
@@ -118,7 +119,7 @@ async def get_search(search_id: UUID):
         raise HTTPException(status_code=503, detail="데이터베이스 연결 실패")
     if saved is None:
         raise HTTPException(status_code=404, detail="검색 결과를 찾을 수 없습니다")
-    if saved["search"].get("schema_version") != 4:
+    if saved["search"].get("schema_version") != SCHEMA_VERSION:
         saved["search"]["legacy_validation"] = True
     return {"source": "cache", **saved}
 

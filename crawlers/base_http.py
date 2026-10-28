@@ -73,14 +73,16 @@ class BaseHttpCrawler(BaseCrawler):
         author = author if isinstance(author, list) else [author]
         author = ", ".join(a.get("name", "") if isinstance(a, dict) else str(a) for a in author)
         if not author:
-            author_node = soup.select_one('#bylineInfo, .ContributorLinksList, [itemprop="author"]')
+            author_node = soup.select_one('#bylineInfo, .ContributorLinksList, [itemprop="author"], h3.h3_work_author')
             author = author_node.get_text(" ", strip=True) if author_node else ""
         if not author:
             import re
             byline = re.search(r"\s+by\s+(.+)$", title, re.I)
             author = byline.group(1).strip() if byline else ""
         expected = self._expected_title or (query if query and not is_isbn(query) else None)
-        if not title or (expected and not title_score(expected, title)) or (self._expected_author and not author) or not author_matches(self._expected_author, author):
+        node_isbns = raw_isbn if isinstance(raw_isbn, list) else [raw_isbn] if raw_isbn else []
+        exact_book_isbn = bool(query and is_isbn(query) and isbn_matches(query, node_isbns))
+        if not title or (expected and not title_score(expected, title) and not exact_book_isbn) or (self._expected_author and not author) or not author_matches(self._expected_author, author):
             self.failure_status = "identity_mismatch"
             return False
         if query and is_isbn(query) and not isbn_matches(query, identifiers):

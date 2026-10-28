@@ -16,6 +16,7 @@ dependencies = [
     "python-dotenv",
     "vercel>=0.6",
     "httpx>=0.28.1",
+    "curl-cffi>=0.14,<0.15",
 ]
 
 [project.optional-dependencies]

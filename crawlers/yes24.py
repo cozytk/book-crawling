@@ -5,7 +5,26 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import title_score, is_isbn, clean_isbn, structured_isbns, isbn_matches, count_number, book_node
+from .utils import title_score, is_isbn, clean_isbn, structured_isbns, isbn_matches, count_number, book_node, author_matches, candidate_score, edition_preference
+
+
+def original_author_for_isbn(isbn, expected_author=None):
+    """Resolve a romanized author only from the verified edition's author box."""
+    if not isbn or not is_isbn(isbn):
+        return None
+    crawler = Yes24Crawler()
+    url, _ = crawler.search_by_keyword(isbn)
+    if not url:
+        return None
+    soup = BeautifulSoup(crawler._fetch_html(url), "html.parser")
+    for area in soup.select("#infoset_authorGrp .author_name"):
+        if not re.match(r"\s*저\s*:", area.get_text(" ", strip=True)):
+            continue
+        name = area.select_one(".lnk_author")
+        alias = area.select_one(".name_other")
+        if name and alias:
+            return alias.get_text(" ", strip=True).strip("() ") or None
+    return None
 
 
 class Yes24Crawler(BaseHttpCrawler):
@@ -28,7 +47,7 @@ class Yes24Crawler(BaseHttpCrawler):
             url, title = self._select_product(keyword, html)
             return url, title, self.book_isbn, self.book_author
         transport = active_transport()
-        result = transport.memo(("yes24-product", keyword), identify) if transport else identify()
+        result = transport.memo(("yes24-product", keyword, self._expected_author), identify) if transport else identify()
         url, title, self.book_isbn, self.book_author = result
         self._selected_title = title or None
         self._selected_product = re.search(r"/goods/(\d+)", url or "", re.I).group(1) if url else None
@@ -46,6 +65,18 @@ class Yes24Crawler(BaseHttpCrawler):
         for link in soup.select("a.gd_name"):
             href = link.get("href", "")
             text = link.get_text(strip=True)
+            container = link.find_parent("li") or link.parent
+            format_node = container.select_one(".info_name .gd_res")
+            if format_node and format_node.get_text(strip=True) not in {"[도서]", "[eBook]", "[직수입양서]", "[외서]"}:
+                continue
+            if format_node and format_node.get_text(strip=True) == "[eBook]" and not is_isbn(keyword):
+                continue
+            author_node = container.select_one(".info_auth, .authPub .auth, .gd_auth")
+            candidate_author = author_node.get_text(" ", strip=True) if author_node else ""
+            if not is_isbn(keyword) and self._expected_author and (not candidate_author or not author_matches(self._expected_author, candidate_author)):
+                continue
+            if not is_isbn(keyword) and re.search(r"원저|원작|각색|편역", candidate_author):
+                continue
 
             # 중고서점 제외
             if "UsedShopHub" in href:
@@ -55,7 +86,9 @@ class Yes24Crawler(BaseHttpCrawler):
             if "/product/goods/" not in href.lower():
                 continue
 
-            score = title_score(keyword, text)
+            score = candidate_score(keyword, text, candidate_author, self._expected_author)
+            if score:
+                score += edition_preference(keyword, text) / 10000
             identifiers = structured_isbns(link.parent)
             if is_isbn(keyword):
                 if not isbn_matches(keyword, identifiers):
@@ -79,10 +112,8 @@ class Yes24Crawler(BaseHttpCrawler):
                 best_score = score
                 best_url = href
                 best_title = text
-                container = link.find_parent("li") or link.parent
                 self.book_isbn = next(iter(identifiers), None)
-                author = container.select_one(".info_auth, .authPub .auth, .gd_auth")
-                self.book_author = author.get_text(" ", strip=True) if author else None
+                self.book_author = candidate_author or None
 
         if not best_url:
             return None, ""

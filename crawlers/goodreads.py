@@ -9,7 +9,7 @@ import urllib.request
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import is_isbn, title_score, book_node, valid_rating, count_number
+from .utils import is_isbn, title_score, book_node, valid_rating, count_number, candidate_score
 
 
 class GoodreadsCrawler(BaseHttpCrawler):
@@ -145,9 +145,16 @@ class GoodreadsCrawler(BaseHttpCrawler):
         soup = BeautifulSoup(html, "html.parser")
 
         # 검색 결과 테이블에서 책 링크 찾기
-        links = soup.select("a.bookTitle") or soup.select('a[href*="/book/show/"]')
-        book_link = max(links, key=lambda link: title_score(keyword, link.get_text(strip=True)), default=None)
-        if book_link and not title_score(keyword, book_link.get_text(strip=True)):
+        links = soup.select("a.bookTitle, [data-testid='book-item-title'] a") or soup.select('a[href*="/book/show/"]')
+        def score(link):
+            container = link.find_parent("tr") or link.find_parent(class_="Book") or link.parent
+            authors = ", ".join(a.get_text(" ", strip=True) for a in container.select('a[href*="/author/show/"]'))
+            # Some server-rendered variants omit the byline. The detail Book
+            # node must still prove the known author before a rating is used.
+            return candidate_score(keyword, link.get_text(" ", strip=True), authors,
+                                   self._expected_author if authors else None)
+        book_link = max(links, key=score, default=None)
+        if book_link and not score(book_link):
             book_link = None
         if book_link:
             book_url = book_link.get("href", "")

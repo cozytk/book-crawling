@@ -9,7 +9,7 @@ import urllib.request
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import title_score, is_isbn, clean_isbn, structured_isbns, isbn_matches
+from .utils import title_score, is_isbn, clean_isbn, structured_isbns, isbn_matches, author_matches, candidate_score, edition_preference
 
 
 class KyoboCrawler(BaseHttpCrawler):
@@ -68,6 +68,10 @@ class KyoboCrawler(BaseHttpCrawler):
                 book_name = book_name.split("]", 1)[1].strip()
 
             book_url = title_elem.get("href", "")
+            author_node = item.select_one(".prod_author_group .author.rep, .prod_author, .prod_author_info .author")
+            candidate_author = author_node.get_text(" ", strip=True) if author_node else ""
+            if not is_isbn(keyword) and self._expected_author and (not candidate_author or not author_matches(self._expected_author, candidate_author)):
+                continue
 
             if not book_url:
                 continue
@@ -83,7 +87,9 @@ class KyoboCrawler(BaseHttpCrawler):
             if not is_isbn(keyword) and any(kw in book_name and kw not in keyword for kw in exclude_keywords):
                 continue
 
-            score = title_score(keyword, book_name)
+            score = candidate_score(keyword, book_name, candidate_author, self._expected_author)
+            if score:
+                score += edition_preference(keyword, book_name) / 10000
             if is_isbn(keyword):
                 score = 1.0 if isbn_matches(keyword, structured_isbns(item)) else 0.0
             if score > best_score:
@@ -103,6 +109,7 @@ class KyoboCrawler(BaseHttpCrawler):
                 self.count_observed = count is not None
                 self._rating_loaded = self._search_rating is not None
                 self.book_isbn = next(iter(structured_isbns(item)), None)
+                self.book_author = candidate_author or None
 
         return (best_url, best_title) if best_url else (None, "")
 

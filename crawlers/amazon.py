@@ -9,7 +9,7 @@ import urllib.request
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import is_isbn, title_score, book_node, valid_rating, count_number, isbn13
+from .utils import is_isbn, title_score, book_node, valid_rating, count_number, isbn13, author_matches
 
 
 class AmazonCrawler(BaseHttpCrawler):
@@ -134,7 +134,7 @@ class AmazonCrawler(BaseHttpCrawler):
         https://www.amazon.com/s?k={keyword}&i=stripbooks-intl-ship 형식으로 검색.
         """
         encoded = urllib.parse.quote(keyword)
-        search_url = f"https://www.amazon.com/s?k={encoded}&i=stripbooks-intl-ship"
+        search_url = f"https://www.amazon.com/s?k={encoded}&i=stripbooks"
 
         try:
             html = self._fetch_with_headers(search_url)
@@ -160,6 +160,13 @@ class AmazonCrawler(BaseHttpCrawler):
                 continue
 
             title = title_elem.get_text(strip=True)
+            text = result.get_text(" ", strip=True)
+            if not is_isbn(keyword) and re.search(r"Audiobook|Audible", text, re.I) and not re.search(r"audio|audible", keyword, re.I):
+                continue
+            # Explicit byline on modern search cards; detail is still verified.
+            byline = result.select_one('[data-cy="title-recipe"] .a-row:not(.a-size-medium), .a-row.a-size-base.a-color-secondary')
+            if self._expected_author and byline and not author_matches(self._expected_author, byline.get_text(" ", strip=True)):
+                continue
             if is_isbn(keyword):
                 if not (asin.isdigit() and isbn13(asin) == isbn13(keyword)):
                     if str(keyword).startswith("979"):
@@ -201,6 +208,10 @@ class AmazonCrawler(BaseHttpCrawler):
             self._selected_title = title
             return book_url, title
 
+        # Do not reintroduce filtered audio/other-author cards through a generic
+        # link fallback on the same structured results page.
+        if candidates:
+            return None, ""
         # 방법 2: 일반 링크에서 /dp/ 패턴 찾기
         for link in soup.select('a[href*="/dp/"]'):
             href = link.get("href", "")

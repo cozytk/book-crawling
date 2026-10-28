@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 
 from .base_http import BaseHttpCrawler
-from .utils import title_score, is_isbn, clean_isbn
+from .utils import title_score, is_isbn, clean_isbn, author_matches, candidate_score
 from models.book import PlatformRating
 
 
@@ -27,11 +27,8 @@ class AladinCrawler(BaseHttpCrawler):
             # .env 파일에서 직접 읽기 시도
             env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
             if os.path.exists(env_path):
-                with open(env_path) as f:
-                    for line in f:
-                        if line.startswith("ALADIN_TTB_KEY="):
-                            self.ttb_key = line.strip().split("=", 1)[1]
-                            break
+                from dotenv import dotenv_values
+                self.ttb_key = dotenv_values(env_path).get("ALADIN_TTB_KEY") or ""
 
     def _api_request(self, endpoint: str, params: dict) -> dict | None:
         """알라딘 API 호출"""
@@ -117,7 +114,9 @@ class AladinCrawler(BaseHttpCrawler):
 
         for item in result["item"]:
             title = item.get("title", "")
-            relevance = title_score(query, title)
+            if self._expected_author and not author_matches(self._expected_author, item.get("author", "")):
+                continue
+            relevance = candidate_score(query, title, item.get("author", ""), self._expected_author)
             if is_isbn(query):
                 relevance = 1.0 if clean_isbn(query) in (item.get("isbn"), item.get("isbn13")) else 0.0
             if not relevance:
@@ -150,6 +149,12 @@ class AladinCrawler(BaseHttpCrawler):
             import math
             if sales_point > 0:
                 score += math.log10(sales_point) * 15
+            # Category metadata can reveal an adaptation hidden by a short
+            # product title. Prefer a general edition when one is available;
+            # children's originals remain discoverable if all editions are so.
+            category = item.get("categoryName", "")
+            if not is_isbn(query) and any(k in category and k not in query for k in ("어린이", "청소년", "중학생")):
+                score -= 150
 
             # 4. 제외 키워드 감점 (학습서, 중고 등)
             penalties = ["중학생", "초등", "어린이", "청소년", "워크북", "중고", "만화", "코믹스"]
@@ -182,6 +187,7 @@ class AladinCrawler(BaseHttpCrawler):
         # itemId와 isbn13 저장 (get_rating, get_original_title_info에서 사용)
         self._current_item_id = best_item.get("itemId")
         self._current_isbn13 = best_item.get("isbn13")
+        self._current_item = best_item
 
         self.logger.search_complete(
             query, found=True, title=book_title,
@@ -271,6 +277,7 @@ class AladinCrawler(BaseHttpCrawler):
         sub_info = item.get("subInfo", {})
         original_title = sub_info.get("originalTitle") or None
         author = item.get("author", "")
+        original_author, _ = self._parse_author(author)
         isbn13 = item.get("isbn13") or getattr(self, "_current_isbn13", None)
 
         self.logger.api_response("ItemLookUp.details", {"subInfo": sub_info, "author": author})
@@ -298,7 +305,7 @@ class AladinCrawler(BaseHttpCrawler):
 
         return {
             "title": original_title,
-            "author": author,
+            "author": original_author or author,
             "isbn13": isbn13,
         }
 
