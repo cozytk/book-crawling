@@ -7,7 +7,7 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import title_score, is_isbn, clean_isbn, structured_isbns, isbn_matches, count_number
+from .utils import title_score, is_isbn, clean_isbn, structured_isbns, isbn_matches, count_number, book_node, valid_rating
 
 
 class SarakCrawler(BaseHttpCrawler):
@@ -53,6 +53,51 @@ class SarakCrawler(BaseHttpCrawler):
         product_id = self._extract_product_id(url or "")
         if not product_id:
             return None, ""
+        if not is_isbn(keyword) and not is_isbn(self._original_query or ''):
+            # The largest Yes24 written-review population can have very few
+            # Sarak votes. Reuse its verified search candidates, but compare
+            # this source's own aggregates for at most three eligible books.
+            candidates=sorted(getattr(identifier,'_candidate_products',[]),key=lambda c:c['support'],reverse=True)
+            unique={}
+            for candidate in candidates:
+                candidate_id=self._extract_product_id(candidate['url'])
+                if candidate_id and candidate_id not in unique:
+                    unique[candidate_id]=candidate
+                if len(unique)==3:
+                    break
+            aggregates=[]
+            for candidate_id,candidate in unique.items():
+                try:
+                    data=json.loads(self._fetch_html(f'{self.api_url}/{candidate_id}/book-statistics-summary'))
+                    if str(data.get('goodsNo'))!=candidate_id:
+                        continue
+                    voters=count_number(data.get('userWhoDidVoteThisBookCount'))
+                    score=valid_rating(data.get('starPointAverageForBookInfo'),10)
+                    if voters is None or score is None or score<=0:
+                        continue
+                    aggregates.append((voters,count_number(data.get('reviewCount')) or 0,candidate_id,candidate,data))
+                except Exception:
+                    continue
+            for _,_,candidate_id,candidate,data in sorted(aggregates,key=lambda x:(x[0],x[1]),reverse=True):
+                try:
+                    detail=BeautifulSoup(self._fetch_html(candidate['url']),'html.parser')
+                    node=book_node(detail,candidate['title'])
+                    if not node or str(node.get('sku',''))!=candidate_id or not identifier.verify_detail(detail,str(node.get('name',''))):
+                        continue
+                except Exception:
+                    continue
+                self.book_isbn,self.book_author=identifier.book_isbn,identifier.book_author
+                self.rating_count=count_number(data.get('userWhoDidVoteThisBookCount'))
+                self.text_review_count=count_number(data.get('reviewCount'))
+                self._cached_rating=valid_rating(data.get('starPointAverageForBookInfo'),10)
+                self._cached_review_count=self.rating_count
+                self._rating_loaded=self.count_observed=True
+                from .transport import active_transport
+                transport=active_transport()
+                if transport:
+                    transport.diagnostics.setdefault(self.name,{}).update({'method':'verified_candidate_aggregates',
+                        'product_id':candidate_id,'candidates':[{'product_id':a[2],'rating_count':a[0],'text_review_count':a[1]} for a in aggregates]})
+                return f'{self.base_url}/reading-note/book/{candidate_id}',str(node['name'])
         self.book_isbn, self.book_author = identifier.book_isbn, identifier.book_author
         return f"{self.base_url}/reading-note/book/{product_id}", title
 
@@ -69,6 +114,8 @@ class SarakCrawler(BaseHttpCrawler):
         - starPointAverageForBookInfo: 평점 (10점 만점)
         - userWhoDidVoteThisBookCount: 평가 참여자 수
         """
+        if self._rating_loaded:
+            return self._cached_rating,self._cached_review_count
         goods_no = self._extract_goods_no(url)
         if not goods_no:
             self.logger.error("extract_goods_no_failed", f"URL: {url}")

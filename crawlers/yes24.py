@@ -42,10 +42,11 @@ class Yes24Crawler(BaseHttpCrawler):
             search_url += '&order=REVIEW_CNT'
 
         def identify():
+            self._candidate_products=[]
             try:
                 html = self._fetch_html(search_url)
             except Exception:
-                return None, "", None, None
+                return None, "", None, None, []
             url, title = self._select_product(keyword, html)
             if url:
                 try:
@@ -58,22 +59,23 @@ class Yes24Crawler(BaseHttpCrawler):
                     if node:
                         if product and str(node.get('sku',product.group(1)))!=product.group(1):
                             self.failure_status='identity_mismatch'
-                            return None,'',None,None
+                            return None,'',None,None,[]
                         if not self.verify_detail(detail,str(node.get('name','')),keyword if is_isbn(keyword) else None):
-                            return None,'',None,None
+                            return None,'',None,None,[]
                 except Exception:
                     # The rating lookup retries the same verified product;
                     # transport failure remains distinguishable from no match.
                     pass
-            return url, title, self.book_isbn, self.book_author
+            return url, title, self.book_isbn, self.book_author, self._candidate_products
         transport = active_transport()
         result = transport.memo(("yes24-product", keyword, self._expected_author), identify) if transport else identify()
-        url, title, self.book_isbn, self.book_author = result
+        url, title, self.book_isbn, self.book_author, self._candidate_products = result
         self._selected_title = title or None
         self._selected_product = re.search(r"/goods/(\d+)", url or "", re.I).group(1) if url else None
         return url, title
 
     def _select_product(self, keyword, html):
+        self._candidate_products=[]
         soup = BeautifulSoup(html, "html.parser")
 
         # a.gd_name 클래스로 검색 결과 링크 찾기
@@ -142,6 +144,9 @@ class Yes24Crawler(BaseHttpCrawler):
             counter=container.select_one('.rating_rvCount .txC_blue')
             support=sum(n for n in written if n is not None) if written else count_number(counter.get_text()) if counter else 0
             rank=(bool(score),0 if is_isbn(keyword) else support or 0,score)
+            if score:
+                self._candidate_products.append({'url':urllib.parse.urljoin(self.base_url,href),'title':text,
+                    'author':candidate_author,'support':support or 0})
             if score and rank > best_rank:
                 best_rank = rank
                 best_score = score
