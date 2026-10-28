@@ -219,6 +219,26 @@ class GoodreadsCrawler(BaseHttpCrawler):
             self._selected_title = book_title
             return book_url, book_title
 
+        if self._expected_author and not is_isbn(self._original_query or keyword):
+            # Autocomplete has only five slots and can omit the real work.
+            # A full title observed in the native result list is a discovery
+            # query, never identity proof: its new Book response must still
+            # independently match the known author before accepting stars.
+            titles=[]
+            for link in links:
+                title=link.get_text(' ',strip=True)
+                if title!=keyword and title not in titles and candidate_score(keyword,title,self._expected_author,self._expected_author):
+                    titles.append(title)
+            for title in titles[:2]:
+                try:
+                    url=f'{self.base_url}/book/auto_complete?format=json&q={urllib.parse.quote(title)}'
+                    payload,_=self._fetch_with_redirect(url)
+                    found=self._autocomplete_aggregate(payload,keyword)
+                    if found:
+                        return found
+                except Exception:
+                    continue
+
         if not links and not re.search(r"no\s+(?:books|results)\s+(?:were\s+)?found|did not match any books",soup.get_text(" ",strip=True),re.I):
             self.failure_status="parse_error"
 

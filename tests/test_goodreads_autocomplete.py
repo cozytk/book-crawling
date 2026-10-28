@@ -76,3 +76,32 @@ def test_catalog_article_alias_requires_matching_author_and_preserves_gates():
     assert not candidate_score('Miserables','Les Miserables','Victor Hugo')
     assert not candidate_score('Miserables','Les Miserables Study Guide','Victor Hugo','Victor Hugo')
     assert not candidate_score('Les Miserables 1','Miserables 2','Victor Hugo','Victor Hugo')
+
+
+def test_missing_top_five_work_is_rediscovered_by_observed_full_title(monkeypatch):
+    result=crawler()
+    result.expected_identity('Miserables',['Victor Hugo'],strict_isbn=False)
+    calls=[]
+    actual=book(bookId='36377471',bookUrl='/book/show/36377471-les-miserables',title='Les Miserables',
+                bookTitleBare='Les Miserables',author={'name':'Victor Hugo'},avgRating='4.22',ratingsCount=868927)
+    def fetch(url):
+        calls.append(url)
+        if 'q=Les%20Miserables' in url:
+            return json.dumps([actual]),url
+        if '/auto_complete' in url:
+            return json.dumps([book(author={'name':'Other Author'})]),url
+        return '<div><a class="bookTitle" href="/book/show/36377471-les-miserables">Les Miserables</a></div>',url
+    monkeypatch.setattr(result,'_fetch_with_redirect',fetch)
+    assert result.search_by_keyword('Miserables')[0].endswith('/36377471')
+    assert result.rating_count==868927 and len(calls)==3
+
+
+def test_observed_title_alone_cannot_bypass_author_revalidation(monkeypatch):
+    result=crawler()
+    result.expected_identity('Miserables',['Victor Hugo'],strict_isbn=False)
+    def fetch(url):
+        if '/auto_complete' in url:
+            return json.dumps([book(bookTitleBare='Les Miserables',author={'name':'Another Author'})]),url
+        return '<a class="bookTitle" href="/book/show/1420">Les Miserables</a>',url
+    monkeypatch.setattr(result,'_fetch_with_redirect',fetch)
+    assert result.search_by_keyword('Miserables')==(None,'')
