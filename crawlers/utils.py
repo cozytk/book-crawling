@@ -70,6 +70,11 @@ def title_score(query: str, title: str) -> float:
         # and the catalog spelling ("아래" / "아래서"). Do not allow arbitrary
         # extra words: all derivative and volume gates below still apply.
         value=re.sub(r'아래서(?=$|\s*[(\[])','아래',value)
+        # German catalogs vary the final proper-name genitive (e.g. an older
+        # spelling ending in -s). Require a long title and an explicit
+        # genitive article; this is not a general suffix/fuzzy-title rule.
+        if len(value.split())>=4 and re.search(r'\b(?:des|eines)\b',value):
+            value=re.sub(r'\b([a-z]{6,})s(?=$|\s*[(\[])',r'\1',value)
         return "".join(c for c in value if c.isalnum())
 
     title = re.split(r"\s+by\s+", title, flags=re.I)[0]

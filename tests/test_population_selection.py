@@ -21,6 +21,9 @@ def test_titles_allow_diacritic_and_locative_spelling_without_relaxing_derivativ
     assert not title_score('수레바퀴 아래','수레바퀴 아래서 해설')
     assert not title_score('데미안','데미안에서')
     assert not title_score('해리 포터 상','해리 포터 하')
+    assert title_score('Die Leiden des jungen Werthers','Die Leiden des jungen Werther')
+    assert not title_score('Die Leiden des jungen Werthers','Die Leiden des jungen Werther - Study Guide')
+    assert not title_score('The Sorrows of Young Werthers','The Sorrows of Young Werther')
 
 
 def test_goodreads_uses_verified_author_and_population_before_minor_title_differences():
@@ -36,6 +39,16 @@ def test_goodreads_uses_verified_author_and_population_before_minor_title_differ
         url,title=c.search_by_keyword('Братья Карамазовы')
     assert url.endswith('/2')
     assert c.rating_count is None  # 420k must not become an exact output count.
+
+
+def test_goodreads_genitive_spelling_does_not_prefer_a_23_rating_edition():
+    c=GoodreadsCrawler()
+    c.expected_identity('Die Leiden des jungen Werthers','Johann Wolfgang von Goethe',False)
+    def card(identifier,title,count):
+        return f'<div class="Book"><span data-testid="book-item-title"><a href="/book/show/{identifier}">{title}</a></span><a href="/author/show/1">Johann Wolfgang von Goethe</a><span data-testid="book-item-ratings-count">{count} ratings</span></div>'
+    html=card('705790','Die Leiden des jungen Werther','165k')+card('2','Die Leiden des jungen Werthers: In der Fassung von 1774. Roman (Fischer Klassik Plus)','23')
+    with patch.object(c,'_fetch_with_redirect',return_value=(html,'https://www.goodreads.com/search')):
+        assert c.search_by_keyword('Die Leiden des jungen Werthers')[0].endswith('/705790')
 
 
 def test_amazon_population_outranks_exact_title_after_work_identity_gates():
