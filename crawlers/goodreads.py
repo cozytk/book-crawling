@@ -136,6 +136,9 @@ class GoodreadsCrawler(BaseHttpCrawler):
         Returns:
             (book_url, book_title) 또는 (None, "") if not found
         """
+        transport=active_transport()
+        if transport:
+            transport.diagnostics.setdefault(self.name,{}).update({'query':keyword,'expected_author':self._expected_author})
         # Native header search exposes a public Book autocomplete response.
         # It carries exact work rating counts, title, author and Book IDs in
         # one response, so a work query need not request a blocked detail page.
@@ -147,8 +150,9 @@ class GoodreadsCrawler(BaseHttpCrawler):
                 found = self._autocomplete_aggregate(payload, keyword)
                 if found:
                     return found
-            except Exception:
-                pass
+            except Exception as error:
+                if transport:
+                    transport.diagnostics.setdefault(self.name,{})['autocomplete_error']=type(error).__name__
 
         encoded_title = urllib.parse.quote(keyword)
         search_url = f"https://www.goodreads.com/search?q={encoded_title}&tab=books&filter=title"
@@ -224,6 +228,12 @@ class GoodreadsCrawler(BaseHttpCrawler):
         rows = json.loads(payload)
         if not isinstance(rows, list):
             return None
+        transport=active_transport()
+        if transport:
+            transport.diagnostics.setdefault(self.name,{})['autocomplete_candidates']=[{
+                'title':row.get('bookTitleBare') or row.get('title'),'author':row.get('author'),
+                'book_id':row.get('bookId'),'work_id':row.get('workId'),'url':row.get('bookUrl'),
+                'ratings_count':row.get('ratingsCount')} for row in rows[:8] if isinstance(row,dict)]
         candidates=[]
         for row in rows:
             if not isinstance(row, dict):
