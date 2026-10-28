@@ -106,7 +106,13 @@ class SearchTransport:
                         if self.browser_client is None:
                             self.browser_client = AsyncSession(impersonate="chrome", timeout=8)
                         try:
-                            page = await self.browser_client.get(url, headers=headers, allow_redirects=False)
+                            # Keep the browser preset's User-Agent and client
+                            # hints coherent with its TLS/HTTP implementation.
+                            # Legacy parser headers must not override one part
+                            # with an unrelated Chrome version.
+                            browser_headers={k:v for k,v in (headers or {}).items()
+                                             if k.lower()!='user-agent' and not k.lower().startswith('sec-ch-ua')}
+                            page = await self.browser_client.get(url, headers=browser_headers, allow_redirects=False)
                         except Timeout:
                             raise FetchFailure("timeout") from None
                         except RequestException:

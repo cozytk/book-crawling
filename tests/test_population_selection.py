@@ -76,8 +76,12 @@ async def test_aladin_title_search_prefers_reviewed_edition_and_reuses_verified_
     html=row('1','다른 저자',999)+row('11267296','알베르 카뮈',222)+row('212246612','알베르 카뮈',88)
     item={'itemId':11267296,'title':'이방인','author':'알베르 카뮈 (지은이), 김화영 (옮긴이)',
           'isbn13':'9788937462665','link':'https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=11267296',
-          'subInfo':{'ratingInfo':{'ratingScore':9.0,'ratingCount':222,'commentReviewCount':208}}}
+          'subInfo':{'ratingInfo':{'ratingScore':9.0,'ratingCount':222,'commentReviewCount':131,'myReviewCount':86}}}
     with patch.object(c,'_fetch_html',return_value=html),patch.object(c,'_api_request',return_value={'item':[item]}) as fetch:
         url,title=c.search_book_sync('이방인')
         score,count=await c.get_rating(url)
     assert '11267296' in url and score==9.0 and count==222 and fetch.call_count==1
+    assert c.short_review_count==131 and c.text_review_count==86
+    from api.services.crawler_service import rating_dict, rating_from_dict
+    restored=rating_from_dict(rating_dict(c.result_record('이방인',url,title,score,count)))
+    assert restored.short_review_count==131 and restored.text_review_count==86

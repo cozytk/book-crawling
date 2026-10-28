@@ -40,6 +40,7 @@ class BaseHttpCrawler(BaseCrawler):
         super().__init__()
         self.rating_count = None
         self.text_review_count = None
+        self.short_review_count = None
         self.book_isbn = None
         self.book_author = None
         self._rating_loaded = False
@@ -57,6 +58,7 @@ class BaseHttpCrawler(BaseCrawler):
 
     def reset_result(self):
         self.rating_count = self.text_review_count = None
+        self.short_review_count = None
         self.book_isbn = self.book_author = None
         self._cached_rating = None
         self._cached_review_count = 0
@@ -100,6 +102,7 @@ class BaseHttpCrawler(BaseCrawler):
             display_count = count
         return PlatformRating(self.name, rating, self.rating_scale, display_count, url, title,
                               rating_count=self.rating_count, text_review_count=self.text_review_count,
+                              short_review_count=self.short_review_count,
                               isbn=self.book_isbn, author=self.book_author,
                               comparison_scope="edition" if is_isbn(self._original_query or query) else "work",
                               edition_note="지정 ISBN 판본" if is_isbn(self._original_query or query) else "사이트가 선택한 판본 · 원문 제목 확인")

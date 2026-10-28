@@ -392,7 +392,8 @@ class AladinCrawler(BaseHttpCrawler):
         # ratingCount: 별점 참여자 수 (commentReviewCount는 100자평 개수)
         from .utils import count_number
         self.rating_count = count_number(rating_info.get("ratingCount"))
-        self.text_review_count = count_number(rating_info.get("commentReviewCount"))
+        self.short_review_count = count_number(rating_info.get("commentReviewCount"))
+        self.text_review_count = count_number(rating_info.get("myReviewCount"))
         review_count = self.rating_count or 0
         self.book_isbn = item.get("isbn13") or item.get("isbn")
         self.book_author = item.get("author")

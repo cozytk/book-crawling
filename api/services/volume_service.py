@@ -28,6 +28,7 @@ def aggregate_volumes(platform, identity, entries):
     return PlatformRating(platform,round(sum(e['rating'] for e in valid)/count,6),scale,total('review_count'),
         first['url'],identity.title or first['book_title'],rating_count=total('rating_count'),
         text_review_count=total('text_review_count'),author=identity.author,
+        short_review_count=total('short_review_count'),
         comparison_scope='volume_group',edition_note=note,volume_results=entries,
         aggregation_method='volume_mean',aggregate_complete=complete,
         publisher=identity.publisher,translator=identity.translator)

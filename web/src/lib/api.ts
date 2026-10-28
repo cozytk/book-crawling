@@ -10,6 +10,7 @@ export interface PlatformRating {
   review_count: number | null;
   rating_count?: number | null;
   text_review_count?: number | null;
+  short_review_count?: number | null;
   isbn?: string | null;
   author?: string | null;
   edition_note?: string | null;
@@ -33,6 +34,7 @@ export interface VolumeRating {
   rating_scale?: number;
   rating_count?: number | null;
   text_review_count?: number | null;
+  short_review_count?: number | null;
   review_count?: number | null;
   status: string;
 }

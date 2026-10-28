@@ -25,6 +25,7 @@ class PlatformRating:
     aggregate_complete: bool | None = None
     publisher: str | None = None
     translator: str | None = None
+    short_review_count: int | None = None
 
     def __post_init__(self):
         try:
@@ -68,6 +69,7 @@ class BookSearchResult:
                     "crawled_at": r.crawled_at.isoformat(),
                     "rating_count": r.rating_count,
                     "text_review_count": r.text_review_count,
+                    **({'short_review_count':r.short_review_count} if r.short_review_count is not None else {}),
                     "isbn": r.isbn,
                     "author": r.author,
                     "edition_note": r.edition_note,

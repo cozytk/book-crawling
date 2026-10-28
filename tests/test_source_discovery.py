@@ -123,7 +123,9 @@ def test_librarything_current_header_never_uses_members_or_arbitrary_decimals():
 
 async def test_browser_compatible_http_retains_cancel_and_decoded_body_contract():
     started, canceled = asyncio.Event(), asyncio.Event()
+    sent=[]
     async def fetch(url, **kwargs):
+        sent.append(kwargs['headers'])
         if "slow" in url:
             started.set()
             try:
@@ -133,8 +135,9 @@ async def test_browser_compatible_http_retains_cancel_and_decoded_body_contract(
         return SimpleNamespace(status_code=200, content=b"<h1>Book</h1>", headers={"content-encoding":"gzip"}, url=url)
     browser = SimpleNamespace(get=fetch, close=AsyncMock())
     async with SearchTransport(httpx.AsyncClient(), browser_client=browser) as transport:
-        page = await transport.get("https://pedia.watcha.com/book")
+        page = await transport.get("https://pedia.watcha.com/book",{'User-Agent':'legacy Chrome/120','sec-ch-ua':'Chrome120','Accept-Language':'ko-KR'})
         assert page.text == "<h1>Book</h1>"
+        assert sent[0]=={'Accept-Language':'ko-KR'}
         task = asyncio.create_task(transport.get("https://pedia.watcha.com/slow"))
         await started.wait()
         task.cancel()
