@@ -1,5 +1,5 @@
-from crawlers.transport import fetch_sync, FetchFailure
-"""LibraryThing HTTP 기반 크롤러 (cloudscraper 사용)"""
+"""LibraryThing Work Info API with verified-ISBN and HTML fallbacks."""
+from crawlers.transport import fetch_sync, FetchFailure, active_transport, librarything_api_delay
 
 import base64
 import json
@@ -14,14 +14,14 @@ import cloudscraper
 from bs4 import BeautifulSoup, Tag
 
 from .base_http import BaseHttpCrawler
-from .utils import is_isbn, title_score, book_node, valid_rating, count_number
+from .utils import is_isbn, clean_isbn, isbn_matches, title_score, book_node, valid_rating, count_number
 
 
 class LibraryThingCrawler(BaseHttpCrawler):
     """
     LibraryThing 크롤러 (HTTP 기반)
 
-    cloudscraper를 사용하여 Cloudflare 우회.
+    공식 Work Info API를 먼저 조회하며 HTML은 보완 경로로 사용한다.
     """
 
     name = "librarything"
@@ -41,6 +41,71 @@ class LibraryThingCrawler(BaseHttpCrawler):
         self._cached_rating: float | None = None
         self._cached_review_count: int = 0
         self._site_blocked = False
+
+    def _work_info(self, identifier: str) -> tuple[str | None, str]:
+        """Official JSONP: exact ISBN -> work, 10-point score and review count.
+
+        The API does not include title/author or number of star ratings. Display
+        metadata comes from the upstream verified ISBN, never the copies field.
+        Parse only the fixed callback's JSON; never execute returned Javascript.
+        """
+        clean = clean_isbn(identifier).upper()
+        if not is_isbn(clean):
+            return None, ""
+        url = f"{self.base_url}/api/json/workinfo.js?ids={clean}&callback=LT_workinfo"
+        try:
+            response = fetch_sync(url, {"User-Agent": self.user_agent, "Accept": "application/javascript"})
+            if response is None:
+                time.sleep(librarything_api_delay())
+                request = urllib.request.Request(url, headers={"User-Agent": self.user_agent})
+                with urllib.request.urlopen(request, timeout=8) as page:
+                    text = page.read().decode("utf-8")
+            else:
+                text = response.text
+            match = re.search(r"(?:^|\n)LT_workinfo\((\{.*\})\);?\s*$", text, re.S)
+            if not match:
+                self.failure_status = "parse_error"
+                return None, ""
+            payload = json.loads(match.group(1))
+            item = payload.get(clean)
+            if not isinstance(item, dict):
+                return None, ""
+            work = str(item.get("work", ""))
+            if (item.get("type") != "isbn" or not isbn_matches(clean, [item.get("id", "")])
+                    or not work.isdigit() or int(work) <= 0
+                    or self._normalize_work_url(str(item.get("link", ""))) != f"{self.base_url}/work/{work}"):
+                self.failure_status = "identity_mismatch"
+                return None, ""
+            score = valid_rating(item.get("rating"), 10)
+            if score is None:
+                self.failure_status = "parse_error"
+                return None, ""
+            self._cached_rating = score / 2 if score > 0 else None
+            self.text_review_count = count_number(item.get("reviews"))
+            self.rating_count = None
+            self._cached_review_count = self.text_review_count
+            self.book_isbn = clean
+            author = self._expected_author
+            self.book_author = author[0] if isinstance(author, list) and author else author or None
+            self._rating_loaded = True
+            self.failure_status = None
+            transport = active_transport()
+            if transport:
+                transport.diagnostics[self.name] = {"method":"workinfo_api", "isbn":clean,
+                    "work_id":work, "reported_scale":10, "metadata_source":"verified_isbn"}
+            return f"{self.base_url}/work/{work}", self._expected_title or clean
+        except FetchFailure as exc:
+            self.failure_status = exc.status
+        except (ValueError, TypeError, OSError):
+            self.failure_status = "parse_error"
+        return None, ""
+
+    def result_record(self, query, url, title, rating, count):
+        record = super().result_record(query, url, title, rating, count)
+        # LibraryThing aggregates editions as a work even for an ISBN lookup.
+        record.comparison_scope = "work"
+        record.edition_note = "ISBN이 연결된 작품 전체 평가" if self._rating_loaded and self.book_isbn else "작품 전체 평가"
+        return record
 
     def _fetch_with_scraper(
         self,
@@ -97,6 +162,9 @@ class LibraryThingCrawler(BaseHttpCrawler):
 
     def search_by_identifier(self, identifier: str) -> tuple[str | None, str]:
         """ISBN으로 직접 작품 페이지 접근"""
+        result = self._work_info(identifier)
+        if result[0]:
+            return result
         clean = identifier.replace("-", "").replace(" ", "")
         url = f"{self.base_url}/isbn/{clean}"
 
@@ -117,6 +185,10 @@ class LibraryThingCrawler(BaseHttpCrawler):
 
     def search_by_keyword(self, keyword: str) -> tuple[str | None, str]:
         """제목으로 검색"""
+        if self._preferred_isbn:
+            result = self._work_info(self._preferred_isbn)
+            if result[0]:
+                return result
         encoded = urllib.parse.quote(keyword)
         
         # 방법 1: /title/ 직접 접근

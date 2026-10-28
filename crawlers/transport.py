@@ -6,6 +6,7 @@ pool on the ASGI loop; canceling a parser scope cancels its HTTP waiters too.
 import asyncio
 import contextvars
 import concurrent.futures
+import time
 from collections import Counter
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urljoin
@@ -18,6 +19,18 @@ _current = contextvars.ContextVar("search_transport", default=None)
 _scope = contextvars.ContextVar("search_http_scope", default=None)
 WORKERS = concurrent.futures.ThreadPoolExecutor(max_workers=16, thread_name_prefix="parser")
 _domain_limits = WeakKeyDictionary()
+_librarything_api_lock = Lock()
+_librarything_api_next = 0.0
+
+
+def librarything_api_delay():
+    """Reserve one request/second per worker process, including other loops."""
+    global _librarything_api_next
+    with _librarything_api_lock:
+        now = time.monotonic()
+        reserved = max(now, _librarything_api_next)
+        _librarything_api_next = reserved + 1
+    return reserved - now
 
 
 class SearchAborted(BaseException):
@@ -83,6 +96,8 @@ class SearchTransport:
             semaphore = self.domains.setdefault(domain, asyncio.Semaphore(3))
             try:
                 async with semaphore:
+                    if domain == "www.librarything.com" and urlsplit(url).path == "/api/json/workinfo.js":
+                        await asyncio.sleep(librarything_api_delay())
                     self.counts[domain] += 1
                     if self.use_browser_http and domain in {"pedia.watcha.com", "www.goodreads.com"}:
                         from curl_cffi.requests import AsyncSession

@@ -90,7 +90,8 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
                     fallback = foreign.isbn if source_query == foreign.query else foreign.query
                     result = await asyncio.wait_for(crawl_platform(CRAWLERS[platform], source_query,
                         fallback, original_query=query, execution_id=execution_id,
-                        expected_author=foreign.author, on_failure=failure.append), PLATFORM_TIMEOUT)
+                        expected_author=foreign.author, identity_isbn=foreign.isbn,
+                        on_failure=failure.append), PLATFORM_TIMEOUT)
             else:
                 if identity_task is None:
                     identity_task = asyncio.create_task(resolve_work_identity(query))
