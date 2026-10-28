@@ -1,4 +1,4 @@
-from crawlers.transport import fetch_sync
+from crawlers.transport import fetch_sync, active_transport
 """교보문고 HTTP 기반 크롤러"""
 
 import json
@@ -33,6 +33,18 @@ class KyoboCrawler(BaseHttpCrawler):
 
     def search_by_keyword(self, keyword: str) -> tuple[str | None, str]:
         """책 검색 - 검색 페이지 HTML 파싱"""
+        transport=active_transport()
+        if transport and self._preferred_isbn:
+            with transport.memo_lock:
+                future=transport.memo_values.get(("kyobo-selected",keyword,self._preferred_isbn))
+            cached=future.result() if future else None
+            if cached and author_matches(self._expected_author,cached["author"]):
+                self.book_isbn,self.book_author=cached["isbn"],cached["author"]
+                self._search_rating=cached["rating"]
+                self._search_review_count=cached["reviews"]
+                self.count_observed=cached["count_observed"]
+                self._rating_loaded=self._search_rating is not None
+                return cached["url"],cached["title"]
         encoded_query = urllib.parse.quote(keyword)
         search_url = f"https://search.kyobobook.co.kr/search?keyword={encoded_query}&gbCode=TOT&target=total"
 
@@ -55,6 +67,7 @@ class KyoboCrawler(BaseHttpCrawler):
         best_score = 0.0
         self._search_rating = None
         self._search_review_count = 0
+        self.discovery_candidates = []
 
         for item in items:
             # 책 제목 및 URL 추출
@@ -92,6 +105,23 @@ class KyoboCrawler(BaseHttpCrawler):
                 score += edition_preference(keyword, book_name) / 10000
             if is_isbn(keyword):
                 score = 1.0 if isbn_matches(keyword, structured_isbns(item)) else 0.0
+            elif score and self._preferred_isbn and isbn_matches(self._preferred_isbn,structured_isbns(item)):
+                score += 10
+            if score:
+                rating_node=item.select_one(".review_klover_text, .review_score")
+                try:
+                    observed_rating=float(rating_node.get_text(strip=True)) if rating_node else None
+                except ValueError:
+                    observed_rating=None
+                if observed_rating is not None and not 0 < observed_rating <= 10:
+                    observed_rating=None
+                count_node=item.select_one(".review_desc")
+                count_match=re.search(r"[\d,]+",count_node.get_text()) if count_node else None
+                author_id=re.search(r"goClickSearchPage\('chrc',\s*[\"']([^\"']+)",author_node.get("onclick", "")) if author_node else None
+                self.discovery_candidates.append({"title":book_name,"url":book_url,"author":candidate_author,
+                    "author_id":author_id.group(1) if author_id else None,"isbn":next(iter(structured_isbns(item)),None),
+                    "reviews":int(count_match.group().replace(",","")) if count_match else 0,"score":score,
+                    "rating":observed_rating,"count_observed":count_match is not None})
             if score > best_score:
                 best_score = score
                 best_title = book_name

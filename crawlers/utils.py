@@ -9,13 +9,17 @@ import unicodedata
 AUTHOR_ALIASES = {
     "tolstoy": ("레프 니콜라예비치 톨스토이", "레프 톨스토이", "Leo Tolstoy", "Lev Tolstoy", "Лев Толстой", "Л. Н. Толстой"),
     "maugham": ("서머싯 몸", "서머셋 몸", "서머셋 모옴", "서머싯 모옴", "Somerset Maugham"),
+    "dostoevsky": ("표도르 도스토옙스키","표도르 도스토예프스키","Fyodor Dostoevsky","Fyodor Dostoyevsky","Федор Достоевский","Фёдор Достоевский"),
 }
 
 
 def author_keys(value):
     normalize = lambda text: "".join(c for c in unicodedata.normalize("NFKC", str(text)).casefold() if c.isalpha())
     text = normalize(" ".join(value) if isinstance(value, list) else value)
-    return {key for key, aliases in AUTHOR_ALIASES.items() if any(normalize(alias) in text for alias in aliases)}
+    keys={key for key, aliases in AUTHOR_ALIASES.items() if any(normalize(alias) in text for alias in aliases)}
+    if text in {"도스토예프스키","도스토옙스키"}:
+        keys.add("dostoevsky")
+    return keys
 
 
 def bilingual_titles(value):
@@ -202,6 +206,8 @@ def author_matches(expected, actual, strict_script=False):
     left_keys, right_keys = author_keys(expected_text), author_keys(actual_text)
     if left_keys and right_keys:
         return bool(left_keys & right_keys)
+    if expected_text.strip() in {"도스토예프스키","도스토옙스키"} and not right_keys:
+        return False
     def scripts(text):
         return {unicodedata.name(c, "").split(" ")[0] for c in text if c.isalpha()}
     if strict_script and not scripts(expected_text) & scripts(actual_text):

@@ -22,6 +22,25 @@ def work_identity(query):
         # keeps discovery independent of a slow or unavailable TTB account.
         crawler=KyoboCrawler()
         url,title=crawler.search_by_keyword(query)
+        groups={}
+        for candidate in getattr(crawler,"discovery_candidates",[]):
+            if not candidate["author"] or not candidate["isbn"]:
+                continue
+            key=candidate["author_id"] or re.sub(r"\W","",candidate["author"]).casefold()
+            groups.setdefault(key,{})[candidate["isbn"]]=candidate
+        if groups:
+            # Rank a work's author group before its spelling/volume variant.
+            # An exact-title namesake must not outrank a well-supported work
+            # merely because the latter is sold as volumes 1 and 2.
+            group=max(groups.values(),key=lambda entries:(sum(c["reviews"] for c in entries.values()),len(entries)))
+            chosen=max(group.values(),key=lambda c:(c["reviews"],c["score"]))
+            title=chosen["title"]
+            url=chosen["url"]
+            crawler.book_author=chosen["author"]
+            crawler.book_isbn=chosen["isbn"]
+            transport=active_transport()
+            if transport:
+                transport.memo(("kyobo-selected",query,chosen["isbn"]),lambda:chosen)
         if url and crawler.book_author and crawler.book_isbn:
             writer_words=set(crawler.book_author.split())
             local_title=" ".join(w for w in query.split() if w not in writer_words) or query

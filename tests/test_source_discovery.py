@@ -85,6 +85,7 @@ def test_observed_author_variants_do_not_relax_unrelated_author_matching():
     assert not author_matches("Robert Martin", "George Martin")
     assert author_matches(["Fiódor Dostoievski", "Fyodor Dostoevsky"], "Fyodor Dostoevsky")
     assert not author_matches(["도스토옙스키", "Fyodor Dostoevsky"], "Azar Gat")
+    assert not author_matches("도스토예프스키", "안드레이 도스토예프스키")
 
 
 def test_open_library_requires_matched_edition_before_using_another_script_title():
@@ -232,3 +233,15 @@ async def test_foreign_resolution_uses_verified_edition_work_when_ttb_fails():
         result=await _resolve_foreign_query("작품")
     assert result.query=="Verified Work" and result.isbn=="9780132350884"
     lookup.assert_called_once_with(isbn="9788937460449")
+
+
+async def test_work_identity_ranks_author_group_before_exact_title_spelling():
+    from crawlers.work_identity import resolve_work_identity
+    def item(isbn,title,author,reviews):
+        return f'<div class="prod_item" data-isbn="{isbn}"><a class="prod_info" href="/detail/{isbn}">{title}</a><div class="prod_author_group"><a class="author rep">{author}</a></div><span class="review_desc">({reviews})</span></div>'
+    html=(item("9791198491008","죄와 벌","이동재",20)
+          +item("9788932909158","죄와 벌 1","표도르 도스토옙스키",300)
+          +item("9788932909165","죄와 벌 2","표도르 도스토옙스키",100))
+    with patch.object(KyoboCrawler,"_fetch_html",return_value=html):
+        identity=await resolve_work_identity("죄와 벌")
+    assert identity.author=="표도르 도스토옙스키" and identity.isbn=="9788932909158"

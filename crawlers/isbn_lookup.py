@@ -431,6 +431,7 @@ class ISBNLookup:
     """
 
     def __init__(self, providers: list[ISBNProvider] | None = None):
+        self._custom_providers=providers is not None
         if providers is not None:
             self.providers = providers
         else:
@@ -472,10 +473,7 @@ class ISBNLookup:
         """
         # Work/edition links in Open Library can establish a canonical title
         # across scripts; an arbitrary ISBN from a different translation cannot.
-        import unicodedata
-        non_latin = any(c.isalpha() and not unicodedata.name(c, "").startswith("LATIN") for c in title)
-        prefer_work = non_latin or title.strip().isdigit()
-        providers = sorted(self.providers, key=lambda p: 0 if prefer_work and p.name == "open_library" else 1)
+        providers = self.providers if self._custom_providers else sorted(self.providers,key=lambda p:0 if p.name=="open_library" else 1)
         for provider in providers:
             result = provider.search(title, author)
             if result:

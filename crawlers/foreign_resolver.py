@@ -118,10 +118,7 @@ async def _resolve_foreign_query(korean_query: str) -> ForeignQuery:
             logger.debug(f"원서 연결: {original_title} → ISBN {foreign_isbn}")
         else:
             logger.debug(f"원서 연결 (ISBN 없음): {original_title}")
-        query = candidate.title if candidate else primary
-        # Keep a concise known title when the provider only adds a subtitle.
-        if candidate and primary.casefold() == re.split(r"[:：]", candidate.title, maxsplit=1)[0].strip().casefold():
-            query = primary
+        query = re.split(r"\s[-–—]\s|[:：]|\s/\s", candidate.title if candidate else primary,maxsplit=1)[0].strip()
         return ForeignQuery(query=query, isbn=foreign_isbn,
                             author=candidate.authors if candidate else re.split(r"[,、，]", original_author or ""))
 

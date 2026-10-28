@@ -45,6 +45,7 @@ class BaseHttpCrawler(BaseCrawler):
         self._rating_loaded = False
         self._expected_title = None
         self._expected_author = None
+        self._preferred_isbn = None
         self._strict_isbn = True
         self.failure_status = None
         self.count_observed = False
