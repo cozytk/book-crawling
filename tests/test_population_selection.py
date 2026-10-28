@@ -1,10 +1,12 @@
 from unittest.mock import patch
 from crawlers.goodreads import GoodreadsCrawler
 from crawlers.amazon import AmazonCrawler
+from crawlers.yes24 import Yes24Crawler
 from crawlers.isbn_lookup import OpenLibraryProvider
 from crawlers.transport import FetchFailure
 from crawlers.aladin import AladinCrawler
 from crawlers.utils import author_matches, title_score
+import json
 
 
 def test_unicode_author_names_never_match_merely_because_latin_tokens_are_empty():
@@ -109,3 +111,20 @@ async def test_aladin_title_search_prefers_reviewed_edition_and_reuses_verified_
     from api.services.crawler_service import rating_dict, rating_from_dict
     restored=rating_from_dict(rating_dict(c.result_record('이방인',url,title,score,count)))
     assert restored.short_review_count==131 and restored.text_review_count==86
+
+
+async def test_yes24_ranks_written_reviews_and_preserves_short_comments():
+    c=Yes24Crawler()
+    c.expected_identity('이방인','알베르 카뮈',False)
+    def card(product,reviews,short):
+        return f'<li><div class="info_name"><span class="gd_res">[도서]</span><a class="gd_name" href="/product/goods/{product}">이방인</a></div><span class="info_auth">알베르 카뮈 저</span><span class="rating_rvCount"><em class="txC_blue">{reviews+short}</em><span class="moreRatingLi"><li>종이책 리뷰 ({reviews}건)</li><li>종이책 한줄평 ({short}건)</li></span></span></li>'
+    # A huge combined total is not a larger written-review population.
+    html=card('1',4,10000)+card('4827613',307,400)
+    url,_=c._select_product('이방인',html)
+    assert url.endswith('/4827613')
+    c._selected_title='이방인';c._selected_product='4827613'
+    node={'@type':'Book','name':'이방인','sku':'4827613','isbn':'9788937462665','author':{'@type':'Person','name':'알베르 카뮈'}}
+    detail='<h2 class="gd_name">이방인</h2><script type="application/ld+json">'+json.dumps(node)+'</script><div class="gd_rating"><em>9.3</em></div><em id="scroll_bar_count" data-review-count="307" data-onecomment-count="400">(307/400)</em>'
+    with patch.object(c,'_fetch_html',return_value=detail):
+        assert await c.get_rating(url)==(9.3,307)
+    assert c.text_review_count==307 and c.short_review_count==400 and c.book_isbn=='9788937462665'

@@ -114,7 +114,7 @@ async def _platform_results(query, platforms=None, on_status=None, force_refresh
                     if cache:
                         cache_writes.append(asyncio.create_task(platform_cache.write(cache,query,platform,"unavailable",None,reason)))
                     return None
-                source_query = query if platform in {"kyobo", "watcha", "aladin"} else identity.isbn or query
+                source_query = query
                 if platform == "watcha":
                     source_query = identity.title or query
                 if platform in {'kyobo','aladin','yes24','sarak'} and len(identity.editions)>1:

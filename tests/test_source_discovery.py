@@ -181,9 +181,9 @@ async def test_service_uses_shared_isbn_but_preserves_original_work_scope(monkey
     result=await crawler_service.crawl_all("데미안",["yes24","kyobo","watcha"])
     assert len(result.results)==3
     for platform,query,kwargs in calls:
-        assert query == ("데미안" if platform in {"watcha","kyobo"} else "9788937460449")
+        assert query == "데미안"  # Each single-volume shop ranks its own verified editions.
         assert kwargs["original_query"] == "데미안" and kwargs["expected_author"]=="헤르만 헤세"
-        assert kwargs["fallback_query"] == (None if platform in {"watcha","kyobo"} else "데미안")
+        assert kwargs["fallback_query"] is None
 
 
 async def test_adaptation_category_does_not_hide_a_general_edition(mock_aladin_key):

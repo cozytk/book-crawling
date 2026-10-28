@@ -45,6 +45,24 @@ class Yes24Crawler(BaseHttpCrawler):
             except Exception:
                 return None, "", None, None
             url, title = self._select_product(keyword, html)
+            if url:
+                try:
+                    detail_url=urllib.parse.urljoin(self.base_url,url)
+                    detail_html=self._fetch_html(detail_url)
+                    self._selected_detail=(detail_url,detail_html)
+                    detail=BeautifulSoup(detail_html, 'html.parser')
+                    node=book_node(detail,title)
+                    product=re.search(r'/goods/(\d+)',url,re.I)
+                    if node:
+                        if product and str(node.get('sku',product.group(1)))!=product.group(1):
+                            self.failure_status='identity_mismatch'
+                            return None,'',None,None
+                        if not self.verify_detail(detail,str(node.get('name','')),keyword if is_isbn(keyword) else None):
+                            return None,'',None,None
+                except Exception:
+                    # The rating lookup retries the same verified product;
+                    # transport failure remains distinguishable from no match.
+                    pass
             return url, title, self.book_isbn, self.book_author
         transport = active_transport()
         result = transport.memo(("yes24-product", keyword, self._expected_author), identify) if transport else identify()
@@ -61,6 +79,7 @@ class Yes24Crawler(BaseHttpCrawler):
         best_url = None
         best_title = ""
         best_score = 0.0
+        best_rank = (0, 0, 0)
 
         for link in soup.select("a.gd_name"):
             href = link.get("href", "")
@@ -76,6 +95,8 @@ class Yes24Crawler(BaseHttpCrawler):
             if not is_isbn(keyword) and self._expected_author and (not candidate_author or not author_matches(self._expected_author, candidate_author)):
                 continue
             if not is_isbn(keyword) and re.search(r"원저|원작|각색|편역", candidate_author):
+                continue
+            if not is_isbn(keyword) and re.search(r'세트|\bset\b',text,re.I) and not re.search(r'세트|\bset\b',keyword,re.I):
                 continue
 
             # 중고서점 제외
@@ -108,7 +129,19 @@ class Yes24Crawler(BaseHttpCrawler):
                     except Exception:
                         pass
                 score = 1.0 if isbn_matches(keyword, identifiers) else 0.0
-            if score > best_score:
+            # Native search's member-review total combines written reviews,
+            # one-line comments and Sarak stars. Prefer its explicit written
+            # subtotals; a combined total is only a fallback ranking hint.
+            written=[]
+            for row in container.select('.moreRatingLi li'):
+                match=re.fullmatch(r'\s*(?:종이책|eBook)\s+리뷰\s*\(([\d,]+)건\)\s*',row.get_text(' ',strip=True))
+                if match:
+                    written.append(count_number(match.group(1)))
+            counter=container.select_one('.rating_rvCount .txC_blue')
+            support=sum(n for n in written if n is not None) if written else count_number(counter.get_text()) if counter else 0
+            rank=(bool(score),0 if is_isbn(keyword) else support or 0,score)
+            if score and rank > best_rank:
+                best_rank = rank
                 best_score = score
                 best_url = href
                 best_title = text
@@ -127,7 +160,8 @@ class Yes24Crawler(BaseHttpCrawler):
     async def get_rating(self, url: str) -> tuple[float | None, int]:
         """상세 페이지에서 평점/리뷰수 추출"""
         try:
-            html = self._fetch_html(url)
+            cached=getattr(self,'_selected_detail',None)
+            html = cached[1] if cached and cached[0]==url else self._fetch_html(url)
         except Exception:
             self.logger.rating_complete(None, 0, method="html")
             return None, 0
@@ -136,9 +170,18 @@ class Yes24Crawler(BaseHttpCrawler):
 
         # 평점 추출 (Yes24는 10점 만점)
         actual = soup.select_one(".gd_titArea .gd_name, h2.gd_name")
-        if actual and self._selected_title and not title_score(self._selected_title, actual.get_text(strip=True)):
+        if actual and getattr(self,'_selected_title',None) and not title_score(self._selected_title, actual.get_text(strip=True)):
             self.failure_status = "identity_mismatch"
             return None, 0
+        node=book_node(soup,actual.get_text(strip=True) if actual else getattr(self,'_selected_title',None))
+        if node:
+            selected_product=getattr(self,'_selected_product',None)
+            if selected_product and str(node.get('sku',selected_product))!=selected_product:
+                self.failure_status='identity_mismatch'
+                return None,0
+            query=self._original_query if is_isbn(self._original_query or '') else None
+            if not self.verify_detail(soup,str(node.get('name','')),query):
+                return None,0
         final = getattr(self, "_last_url", "")
         selected_product = getattr(self, "_selected_product", None)
         if final and selected_product and not re.search(rf"/goods/{selected_product}(?:[/?#]|$)", final, re.I):
@@ -176,6 +219,7 @@ class Yes24Crawler(BaseHttpCrawler):
             self.text_review_count = count_number(raw_count)
             if self.text_review_count is not None:
                 review_count = self.text_review_count
+            self.short_review_count=count_number(counter.get('data-onecomment-count'))
         areas = soup.select(".gd_reviewArea, .gd_infoTop, #spanGdReview, #infoset_reivew .tit_txt")
         text = " ".join(area.get_text(" ", strip=True) for area in areas)
 
