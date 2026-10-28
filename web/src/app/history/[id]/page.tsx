@@ -89,7 +89,7 @@ export default function HistoryDetailPage() {
             href="/history"
             className="text-sm text-blue-600 hover:text-blue-800"
           >
-            ← 기록로 돌아가기
+            ← 검색 기록으로 돌아가기
           </Link>
         </div>
       </div>
