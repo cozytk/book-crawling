@@ -2,6 +2,7 @@ from unittest.mock import patch
 from crawlers.goodreads import GoodreadsCrawler
 from crawlers.amazon import AmazonCrawler
 from crawlers.isbn_lookup import OpenLibraryProvider
+from crawlers.transport import FetchFailure
 from crawlers.aladin import AladinCrawler
 from crawlers.utils import author_matches, title_score
 
@@ -63,6 +64,16 @@ def test_catalog_english_title_must_belong_to_the_same_verified_work():
     with patch.object(provider,'_api_get',side_effect=[initial,matching]):
         result=provider.search('Cien anos de soledad','Gabriel Garcia Marquez')
     assert result.english_title is None
+
+
+def test_optional_english_catalog_timeout_preserves_identified_work():
+    provider=OpenLibraryProvider()
+    initial={'docs':[{'key':'/works/OL274505W','title':'Cien años de soledad',
+                     'author_name':['Gabriel García Márquez'],'isbn':['9780307474728']}]}
+    with patch.object(provider,'_api_get',side_effect=[initial,FetchFailure('timeout')]) as fetch:
+        result=provider.search('Cien años de soledad','Gabriel García Márquez')
+    assert result.isbn=='9780307474728' and result.english_title is None
+    assert fetch.call_args.kwargs=={'timeout':3}
 
 
 async def test_aladin_title_search_prefers_reviewed_edition_and_reuses_verified_aggregate():

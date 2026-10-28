@@ -291,14 +291,14 @@ class OpenLibraryProvider(ISBNProvider):
     name = "open_library"
     base_url = "https://openlibrary.org/search.json"
 
-    def _api_get(self, url: str) -> dict | None:
+    def _api_get(self, url: str, *, timeout: float | None = None) -> dict | None:
         """Open Library API GET 요청"""
-        response = fetch_sync(url, {"User-Agent": "Mozilla/5.0"})
+        response = fetch_sync(url, {"User-Agent": "Mozilla/5.0"}, timeout=timeout or 12)
         if response is not None:
             return json.loads(response.text)
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "BookCrawler/1.0")
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     def search(self, title: str, author: str | None = None) -> ISBNResult | None:
@@ -372,7 +372,9 @@ class OpenLibraryProvider(ISBNProvider):
                     try:
                         params=urllib.parse.urlencode({'q':f'key:"{chosen.work_key}" language:eng','lang':'en','limit':1,
                             'fields':'key,editions,editions.key,editions.title,editions.isbn,editions.language'})
-                        english=self._api_get(f'{self.base_url}?{params}') or {}
+                        # Optional language enrichment must not discard an
+                        # already identified work by consuming its whole budget.
+                        english=self._api_get(f'{self.base_url}?{params}',timeout=3) or {}
                         for entry in english.get('docs',[]):
                             if entry.get('key')!=chosen.work_key:
                                 continue

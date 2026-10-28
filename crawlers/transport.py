@@ -185,7 +185,7 @@ def active_transport():
     return _current.get()
 
 
-def fetch_sync(url, headers=None):
+def fetch_sync(url, headers=None, *, timeout=12):
     transport = _current.get()
     if transport is None:
         return None  # Standalone legacy/fixture callers retain their injected IO.
@@ -198,7 +198,7 @@ def fetch_sync(url, headers=None):
         if scope.closed:
             future.cancel()
     try:
-        return future.result(timeout=12)
+        return future.result(timeout=timeout)
     except concurrent.futures.CancelledError:
         raise SearchAborted() from None
     except concurrent.futures.TimeoutError:
