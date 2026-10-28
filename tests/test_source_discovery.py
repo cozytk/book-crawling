@@ -22,6 +22,18 @@ from crawlers.aladin import AladinCrawler
 from crawlers.amazon import AmazonCrawler
 
 
+async def test_sarak_preserves_written_reviews_separately_from_ratings():
+    crawler=SarakCrawler()
+    payload={'starPointAverageForBookInfo':8.3,'userWhoDidVoteThisBookCount':803,'reviewCount':164,
+             'commentCount':12,'paperBookReviewCount':155,'ebookReviewCount':9}
+    with patch.object(crawler,'_fetch_html',return_value=json.dumps(payload)):
+        assert await crawler.get_rating('https://sarak.yes24.com/reading-note/book/17386')==(8.3,803)
+    assert crawler.rating_count==803 and crawler.text_review_count==164
+    with patch.object(crawler,'_fetch_html',return_value=json.dumps({'starPointAverageForBookInfo':8.3})):
+        await crawler.get_rating('https://sarak.yes24.com/reading-note/book/17386')
+    assert crawler.rating_count is None and crawler.text_review_count is None
+
+
 @pytest.mark.parametrize("query,title", [
     ("인간의 굴레에서", "인간의 굴레에서 1"),
     ("전쟁과 평화", "전쟁과 평화 4 (무선)"),

@@ -61,6 +61,26 @@ def test_catalog_work_isbns_can_resolve_a_sparse_or_split_librarything_work():
         assert exact._work_info(partial)[0]=='https://www.librarything.com/work/3796965'
 
 
+def test_catalog_isbn_outlier_cannot_win_by_a_larger_unrelated_work():
+    # Native audit: one Werther catalog ISBN mapped to Fathers and Sons. That
+    # unrelated work had more copies than Werther, which had 32 ISBN votes.
+    correct=['9788494653148','9780140445039']
+    wrong='9788498198294'
+    def item(isbn,work,copies):
+        return {'id':isbn,'type':'isbn','work':work,'link':f'https://www.librarything.com/work/{work}',
+                'copies':str(copies),'reviews':'155','rating':7.23}
+    payload={isbn:item(isbn,'28158',9488) for isbn in correct}
+    payload[wrong]=item(wrong,'3493',10235)
+    crawler=LibraryThingCrawler()
+    crawler._related_isbns=tuple(correct)
+    with patch('crawlers.librarything.fetch_sync',return_value=PageResponse('LT_workinfo('+json.dumps(payload)+');','https://www.librarything.com')):
+        assert crawler._work_info(wrong)[0]=='https://www.librarything.com/work/28158'
+    # Explicit ISBN searches retain the site's exact mapping.
+    exact=LibraryThingCrawler()
+    with patch('crawlers.librarything.fetch_sync',return_value=PageResponse('LT_workinfo('+json.dumps(payload)+');','https://www.librarything.com')):
+        assert exact._work_info(wrong)[0]=='https://www.librarything.com/work/3493'
+
+
 @pytest.mark.parametrize('overrides', [
     {'id':'9780451530172'}, {'type':'lccn'}, {'link':'https://example.com/work/995'},
     {'link':'https://www.librarything.com/work/7701'}, {'work':'0'}, {'rating':11},

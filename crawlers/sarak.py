@@ -84,6 +84,7 @@ class SarakCrawler(BaseHttpCrawler):
 
             rating = data.get("starPointAverageForBookInfo")
             self.rating_count = count_number(data.get("userWhoDidVoteThisBookCount"))
+            self.text_review_count = count_number(data.get("reviewCount"))
             review_count = self.rating_count or 0
 
             # 유효성 검사

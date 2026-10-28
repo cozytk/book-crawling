@@ -89,7 +89,12 @@ class LibraryThingCrawler(BaseHttpCrawler):
                 candidates.append((count_number(item.get("copies")) or 0, requested, work, score, item))
             if not candidates:
                 return None, ""
-            _, clean, work, score, item=max(candidates,key=lambda entry:entry[0])
+            # Catalog ISBN lists can contain an erroneous cross-work link. A
+            # single popular namesake must not beat the work supported by many
+            # independently numbered editions. ISBN-10/13 pairs were already
+            # collapsed above, so each vote represents one distinct ISBN.
+            support={work:sum(entry[2]==work for entry in candidates) for _,_,work,_,_ in candidates}
+            _, clean, work, score, item=max(candidates,key=lambda entry:(support[entry[2]],entry[0]))
             self._cached_rating = score / 2 if score > 0 else None
             self.text_review_count = count_number(item.get("reviews"))
             self.rating_count = None
@@ -102,7 +107,8 @@ class LibraryThingCrawler(BaseHttpCrawler):
             transport = active_transport()
             if transport:
                 transport.diagnostics[self.name] = {"method":"workinfo_api", "isbn":clean,
-                    "work_id":work, "reported_scale":10, "metadata_source":"verified_isbn"}
+                    "work_id":work, "reported_scale":10, "metadata_source":"verified_isbn",
+                    "isbn_support":support[work], "candidate_works":len(support)}
             return f"{self.base_url}/work/{work}", self._expected_title or clean
         except FetchFailure as exc:
             self.failure_status = exc.status
