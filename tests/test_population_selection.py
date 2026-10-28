@@ -14,6 +14,10 @@ def test_unicode_author_names_never_match_merely_because_latin_tokens_are_empty(
     assert author_matches(['Фёдор Михайлович Достоевский'], 'Федор Михайлович Достоевский')
     assert author_matches('Gabriel García Márquez','Gabriel Garcia Marquez')
     assert not author_matches('Albert Camus','Albert Smith')
+    assert author_matches('알베르 카뮈','알베르 까뮈 저')
+    assert author_matches('어니스트 밀러 헤밍웨이','어네스트 헤밍웨이')
+    assert not author_matches('알베르 카뮈','알베르 다른작가')
+    assert not author_matches('어니스트 헤밍웨이','다른 헤밍웨이')
 
 
 def test_titles_allow_diacritic_and_locative_spelling_without_relaxing_derivative_or_volume_gates():
@@ -92,7 +96,23 @@ def test_optional_english_catalog_timeout_preserves_identified_work():
     with patch.object(provider,'_api_get',side_effect=[initial,FetchFailure('timeout')]) as fetch:
         result=provider.search('Cien años de soledad','Gabriel García Márquez')
     assert result.isbn=='9780307474728' and result.english_title is None
-    assert fetch.call_args.kwargs=={'timeout':3}
+    assert fetch.call_args_list[1].kwargs=={'timeout':3}
+
+
+def test_catalog_mislabeled_english_entry_loses_to_verified_edition_consensus():
+    p=OpenLibraryProvider()
+    key='/works/OL52556W'
+    initial={'docs':[{'key':key,'title':'Die Leiden des jungen Werthers','author_name':['Johann Wolfgang von Goethe'],'isbn':['9788494653148']}]}
+    mislabeled={'docs':[{'key':key,'editions':{'docs':[{'title':'Die leiden des jungen Werthers','language':['eng']}]}}]}
+    def edition(identifier,title,isbn,work=key):
+        return {'key':identifier,'title':title,'isbn_13':[isbn],'languages':[{'key':'/languages/eng'}],'works':[{'key':work}]}
+    entries=[edition('one','Die Leiden des jungen Werthers','9788494653148'),
+             edition('two','The Sorrows of Young Werther','9780140445039'),
+             edition('three','The sorrows of young Werther.','9780679729518'),
+             edition('wrong','Unrelated English Book','9780000000001','/works/OL999W')]
+    with patch.object(p,'_api_get',side_effect=[initial,mislabeled,{'entries':entries}]):
+        result=p.search('Die Leiden des jungen Werthers','Johann Wolfgang von Goethe')
+    assert result.english_title=='The Sorrows of Young Werther' and result.english_isbn=='9780140445039'
 
 
 async def test_aladin_title_search_prefers_reviewed_edition_and_reuses_verified_aggregate():

@@ -18,9 +18,11 @@ import re
 import unicodedata
 import urllib.parse
 import urllib.request
+import time
+from collections import defaultdict
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from .utils import title_score, author_matches, bilingual_titles
+from .utils import title_score, author_matches, bilingual_titles, isbn13
 
 
 @dataclass
@@ -369,6 +371,7 @@ class OpenLibraryProvider(ISBNProvider):
                 # Query an English edition of this exact, already verified
                 # work. Never translate a title by guessing another search hit.
                 if chosen.work_key and re.fullmatch(r'/works/OL\d+W',chosen.work_key):
+                    enrichment_deadline=time.monotonic()+3
                     try:
                         params=urllib.parse.urlencode({'q':f'key:"{chosen.work_key}" language:eng','lang':'en','limit':1,
                             'fields':'key,editions,editions.key,editions.title,editions.isbn,editions.language'})
@@ -386,6 +389,34 @@ class OpenLibraryProvider(ISBNProvider):
                                     break
                     except Exception:
                         pass
+                    # A catalog's first "English" edition can be mislabeled,
+                    # or contain no purchasable ISBN. Prefer a title supported
+                    # by multiple ISBN-bearing English editions of this exact
+                    # work. Old public-domain records without ISBNs do not
+                    # decide the shop query. This remains optional enrichment.
+                    remaining=enrichment_deadline-time.monotonic()
+                    if remaining>0.05 and (not chosen.english_isbn or not (chosen.english_title or '').isascii()):
+                        try:
+                            data=self._api_get(f'https://openlibrary.org{chosen.work_key}/editions.json?limit=1000',timeout=remaining) or {}
+                            groups=defaultdict(dict)
+                            for edition in data.get('entries',[]):
+                                if not any(language.get('key')=='/languages/eng' for language in edition.get('languages',[])):
+                                    continue
+                                if not any(work.get('key')==chosen.work_key for work in edition.get('works',[])):
+                                    continue
+                                title=edition.get('title','').strip()
+                                identifiers=edition.get('isbn_13',[]) or edition.get('isbn_10',[])
+                                identifiers=[str(value) for value in identifiers if re.fullmatch(r'(?:\d{13}|\d{9}[\dXx])',str(value))]
+                                if not title or not identifiers:
+                                    continue
+                                key=re.sub(r'\W','',title.casefold())
+                                groups[key][isbn13(identifiers[0])]=(title,identifiers[0])
+                            if groups:
+                                winner=max(groups.values(),key=len)
+                                if len(winner)>=2:
+                                    chosen.english_title,chosen.english_isbn=next(iter(winner.values()))
+                        except Exception:
+                            pass
                 return chosen
 
             return None

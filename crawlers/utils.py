@@ -7,6 +7,8 @@ import unicodedata
 
 # Name variants observed in the source catalogs. These map people, never scores.
 AUTHOR_ALIASES = {
+    "camus": ("알베르 카뮈", "알베르 까뮈", "Albert Camus"),
+    "hemingway": ("어니스트 헤밍웨이", "어네스트 헤밍웨이", "어니스트 밀러 헤밍웨이", "어네스트 밀러 헤밍웨이", "Ernest Hemingway"),
     "tolstoy": ("레프 니콜라예비치 톨스토이", "레프 톨스토이", "Leo Tolstoy", "Lev Tolstoy", "Лев Толстой", "Л. Н. Толстой"),
     "maugham": ("서머싯 몸", "서머셋 몸", "서머셋 모옴", "서머싯 모옴", "Somerset Maugham"),
     "dostoevsky": ("표도르 도스토옙스키","표도르 도스토예프스키","Fyodor Dostoevsky","Fyodor Dostoyevsky","Федор Достоевский","Фёдор Достоевский"),
