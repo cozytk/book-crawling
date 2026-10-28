@@ -75,7 +75,7 @@ def test_backend_requires_service_token(monkeypatch):
         assert client.get("/health").status_code == 200
 
 
-async def test_slow_platform_does_not_block_other_results(monkeypatch):
+async def test_slow_platform_does_not_block_other_results(monkeypatch, empty_work_identity):
     async def crawl(cls, query, **kwargs):
         if cls.name == "kyobo":
             await asyncio.sleep(10)

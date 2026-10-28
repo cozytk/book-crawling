@@ -1,4 +1,4 @@
-from crawlers.transport import fetch_sync
+from crawlers.transport import fetch_sync, active_transport
 """Goodreads HTTP 기반 크롤러"""
 
 import json
@@ -41,7 +41,9 @@ class GoodreadsCrawler(BaseHttpCrawler):
         Returns:
             (html, final_url) - 최종 URL과 HTML 내용
         """
-        response = fetch_sync(url, {"User-Agent": self.user_agent})
+        response = fetch_sync(url, {"User-Agent": self.user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9"})
         if response is not None:
             return response.text, response.url
         import time
@@ -102,11 +104,22 @@ class GoodreadsCrawler(BaseHttpCrawler):
 
         # 상세 페이지에서 제목과 평점 추출
         title, rating, review_count = self._parse_detail_page(html)
+        if not self._strict_isbn and self._expected_title and self.rating_count == 0:
+            # A title comparison may search another verified edition of this
+            # work. An explicit user ISBN still retains its unrated edition.
+            return None, ""
         if title and self.verify_detail(BeautifulSoup(html, "html.parser"), title, identifier):
             self._rating_loaded = True
             self._cached_rating = rating
             self._cached_review_count = review_count
             return final_url, title
+
+        transport = active_transport()
+        if transport:
+            transport.diagnostics[self.name] = {"isbn_detail_title": title,
+                "isbn_failure": self.failure_status,
+                "expected_title": self._expected_title,
+                "expected_author": self._expected_author[:2] if isinstance(self._expected_author,list) else self._expected_author}
 
         return None, ""
 
@@ -154,6 +167,12 @@ class GoodreadsCrawler(BaseHttpCrawler):
             return candidate_score(keyword, link.get_text(" ", strip=True), authors,
                                    self._expected_author if authors else None)
         book_link = max(links, key=score, default=None)
+        transport = active_transport()
+        if transport:
+            transport.diagnostics.setdefault(self.name, {}).update({"query": keyword,
+                "page_title": soup.title.get_text() if soup.title else None,
+                "candidates": [{"title":a.get_text(" ",strip=True),"score":score(a)} for a in links[:6]],
+                "total_candidates":len(links)})
         if book_link and not score(book_link):
             book_link = None
         if book_link:
@@ -201,6 +220,8 @@ class GoodreadsCrawler(BaseHttpCrawler):
             match = re.search(r"([\d,]+)", element.get_text()) if element else None
             if match and getattr(self, field) is None:
                 setattr(self, field, count_number(match.group(1)))
+        if self.rating_count == 0:
+            rating = None
         return title, rating, self.rating_count if self.rating_count is not None else self.text_review_count or 0
 
     async def get_rating(self, url: str) -> tuple[float | None, int]:
@@ -229,6 +250,10 @@ class GoodreadsCrawler(BaseHttpCrawler):
         title, rating, review_count = self._parse_detail_page(html)
         expected = self._expected_title or getattr(self, "_selected_title", None)
         if not self.verify_detail(BeautifulSoup(html, "html.parser"), title, expected):
+            transport = active_transport()
+            if transport:
+                node = book_node(BeautifulSoup(html, "html.parser"), title) or {}
+                transport.diagnostics.setdefault(self.name,{}).update({"detail_title":title,"detail_author":node.get("author"),"detail_failure":self.failure_status})
             return None, 0
         self._rating_loaded = True
         self.logger.rating_complete(rating, review_count, method="json-ld", rating_scale=self.rating_scale)

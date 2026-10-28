@@ -168,7 +168,8 @@ async def _subscribe(query, platforms=None, force_refresh=False, cache=None):
                 async with SearchTransport() as transport:
                     async for rating in _platform_results(query, selected, lambda value: emit("status", value), force_refresh, cache):
                         emit("rating", rating)
-                    emit("metrics", {"http_requests": sum(transport.counts.values()), "requests_by_domain": dict(transport.counts)})
+                    emit("metrics", {"http_requests": sum(transport.counts.values()), "requests_by_domain": dict(transport.counts),
+                                     "diagnostics": transport.diagnostics})
             except Exception:
                 emit("error", "검색 중 오류가 발생했습니다")
             finally:

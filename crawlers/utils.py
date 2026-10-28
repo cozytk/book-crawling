@@ -61,7 +61,7 @@ def title_score(query: str, title: str) -> float:
         return 0.0
     derivatives = [r"해설", r"워크북", r"문제집", r"독후감", r"요약", r"만화", r"그래픽\s*노[블벨]", r"어린이", r"청소년",
                    r"\bworkbook\b", r"\bstudy guide\b", r"\bsummary\b", r"\babridged\b", r"\badapted\b",
-                   r"\bgraphic novel\b", r"\bretold\b", r"\bgraded reader\b"]
+                   r"\bgraphic (?:novel|history|adaptation)\b", r"\bretold\b", r"\bgraded reader\b"]
     if any(bool(re.search(pattern, query, re.I)) != bool(re.search(pattern, title, re.I)) for pattern in derivatives):
         return 0.0
     def volumes(value):

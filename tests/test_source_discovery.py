@@ -19,6 +19,7 @@ from crawlers.librarything import LibraryThingCrawler
 from crawlers.isbn_lookup import OpenLibraryProvider
 from crawlers.transport import SearchTransport
 from crawlers.aladin import AladinCrawler
+from crawlers.amazon import AmazonCrawler
 
 
 @pytest.mark.parametrize("query,title", [
@@ -175,3 +176,29 @@ async def test_adaptation_category_does_not_hide_a_general_edition(mock_aladin_k
            {"title":"죄와 벌 1","author":"표도르 도스토옙스키 (지은이)","categoryName":"국내도서>소설>러시아","salesPoint":1000,"itemId":2,"link":"https://example.com/2"}]
     with patch.object(crawler,"_api_request",return_value={"item":items}):
         assert (await crawler.search_book("죄와 벌"))[0].endswith("/2")
+
+
+async def test_waf_success_status_is_not_misreported_as_no_search_results():
+    from crawlers.transport import FetchFailure
+    async def handler(request):
+        return httpx.Response(202,headers={"x-amzn-waf-action":"challenge"},text="<script>AwsWafIntegration</script>")
+    async with SearchTransport(httpx.AsyncClient(transport=httpx.MockTransport(handler))) as transport:
+        with pytest.raises(FetchFailure) as exc:
+            await transport.get("https://www.goodreads.com/search?q=book")
+        assert exc.value.status == "blocked"
+
+
+def test_unrated_goodreads_edition_does_not_contribute_zero_stars():
+    crawler=GoodreadsCrawler()
+    node={"@type":"Book","name":"A Book","aggregateRating":{"ratingValue":0,"ratingCount":0}}
+    html='<h1 data-testid="bookTitle">A Book</h1><script type="application/ld+json">'+json.dumps(node)+'</script>'
+    assert crawler._parse_detail_page(html)[1:] == (None,0)
+
+
+def test_amazon_other_audio_formats_do_not_exclude_the_selected_paperback():
+    crawler=AmazonCrawler()
+    def item(asin,formats):
+        return f'<div data-component-type="s-search-result" data-asin="{asin}"><h2><span>Of Human Bondage</span></h2><div>{formats}</div></div>'
+    html=item("B004N59WMK","Audiobook Other formats: Paperback")+item("059368768X","Paperback Other formats: Kindle, Audiobook")
+    with patch.object(crawler,"_fetch_with_headers",return_value=html):
+        assert crawler.search_by_keyword("Of Human Bondage")[0].endswith("059368768X")

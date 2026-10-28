@@ -67,7 +67,7 @@ class Yes24Crawler(BaseHttpCrawler):
             text = link.get_text(strip=True)
             container = link.find_parent("li") or link.parent
             format_node = container.select_one(".info_name .gd_res")
-            if format_node and format_node.get_text(strip=True) not in {"[도서]", "[eBook]", "[직수입양서]", "[외서]"}:
+            if not is_isbn(keyword) and format_node and format_node.get_text(strip=True) not in {"[도서]", "[eBook]", "[직수입양서]", "[직수입일서]", "[직수입중서]", "[외서]"}:
                 continue
             if format_node and format_node.get_text(strip=True) == "[eBook]" and not is_isbn(keyword):
                 continue

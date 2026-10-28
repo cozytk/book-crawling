@@ -149,7 +149,7 @@ async def test_canceling_parser_cancels_inflight_http():
         await asyncio.wait_for(canceled.wait(), 1)
 
 
-async def test_identical_searches_share_one_collection(monkeypatch):
+async def test_identical_searches_share_one_collection(monkeypatch, empty_work_identity):
     calls = 0
     async def crawl(cls, query, **kwargs):
         nonlocal calls
@@ -163,7 +163,7 @@ async def test_identical_searches_share_one_collection(monkeypatch):
     assert calls == 1 and first == second
 
 
-async def test_one_disconnected_subscriber_does_not_cancel_the_other(monkeypatch):
+async def test_one_disconnected_subscriber_does_not_cancel_the_other(monkeypatch, empty_work_identity):
     started = asyncio.Event(); release = asyncio.Event()
     calls = 0
     async def crawl(cls, query, **kwargs):
@@ -194,7 +194,7 @@ async def test_detail_block_remains_blocked_instead_of_becoming_a_parse_error():
     assert result.rating is None and result.review_count is None
 
 
-async def test_source_failure_expires_without_recrawling_success(tmp_path, monkeypatch):
+async def test_source_failure_expires_without_recrawling_success(tmp_path, monkeypatch, empty_work_identity):
     platform_cache.clear_memory()
     store = LocalStore(str(tmp_path / "source-cache.sqlite3"))
     calls = {"yes24": 0, "kyobo": 0}

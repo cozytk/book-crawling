@@ -37,7 +37,8 @@ class AmazonCrawler(BaseHttpCrawler):
         """
         Amazon 페이지 가져오기 (브라우저와 유사한 헤더 포함)
         """
-        response = fetch_sync(url, {"User-Agent": self.user_agent, "Accept-Language": "en-US,en;q=0.9"})
+        response = fetch_sync(url, {"User-Agent": self.user_agent, "Accept-Language": "en-US,en;q=0.9",
+            "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"})
         if response is not None:
             return response.text
         req = urllib.request.Request(url)
@@ -161,7 +162,8 @@ class AmazonCrawler(BaseHttpCrawler):
 
             title = title_elem.get_text(strip=True)
             text = result.get_text(" ", strip=True)
-            if not is_isbn(keyword) and re.search(r"Audiobook|Audible", text, re.I) and not re.search(r"audio|audible", keyword, re.I):
+            selected_format = re.split(r"Other formats?\s*:", text, maxsplit=1, flags=re.I)[0]
+            if not is_isbn(keyword) and re.search(r"\b(?:Audiobook|Audible)\b", selected_format, re.I) and not re.search(r"audio|audible", keyword, re.I):
                 continue
             # Explicit byline on modern search cards; detail is still verified.
             byline = result.select_one('[data-cy="title-recipe"] .a-row:not(.a-size-medium), .a-row.a-size-base.a-color-secondary')

@@ -58,7 +58,7 @@ class LibraryThingCrawler(BaseHttpCrawler):
         if self._site_blocked:
             raise FetchFailure("blocked")
         try:
-            shared = fetch_sync(url, {"User-Agent": self.user_agent})
+            shared = fetch_sync(url, {"User-Agent": self.user_agent, **headers})
         except FetchFailure as exc:
             self._site_blocked = exc.status == "blocked"
             raise

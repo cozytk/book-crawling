@@ -59,6 +59,7 @@ class SearchTransport:
         self.waiters = Counter()
         self.domains = _domain_limits.setdefault(self.loop, {})
         self.counts = Counter()
+        self.diagnostics = {}
         self.memo_values = {}
         self.memo_lock = Lock()
 
@@ -83,7 +84,7 @@ class SearchTransport:
             try:
                 async with semaphore:
                     self.counts[domain] += 1
-                    if self.use_browser_http and domain == "pedia.watcha.com":
+                    if self.use_browser_http and domain in {"pedia.watcha.com", "www.goodreads.com"}:
                         from curl_cffi.requests import AsyncSession
                         from curl_cffi.requests.exceptions import Timeout, RequestException
                         if self.browser_client is None:
@@ -112,7 +113,7 @@ class SearchTransport:
                     headers = {k: v for k, v in (headers or {}).items() if k.lower() in {"user-agent", "accept", "accept-language"}}
                 url = location
                 continue
-            if response.status_code in {401, 403, 429, 503}:
+            if response.status_code in {401, 403, 429, 503} or response.headers.get("x-amzn-waf-action") in {"challenge", "captcha"}:
                 raise FetchFailure("blocked")
             if response.status_code == 404:
                 raise FetchFailure("not_found")
@@ -122,7 +123,7 @@ class SearchTransport:
                 text = response.content.decode("utf-8")
             except UnicodeDecodeError:
                 text = response.content.decode("cp949", errors="replace")
-            if any(marker in text[:10000].lower() for marker in ("/cdn-cgi/challenge-platform", "performing security verification", "validatecaptcha")):
+            if any(marker in text[:10000].lower() for marker in ("/cdn-cgi/challenge-platform", "performing security verification", "validatecaptcha", "awswafcookiedomainlist", "awswafintegration")):
                 raise FetchFailure("blocked")
             return PageResponse(text, str(response.url))
         raise FetchFailure("network_error")

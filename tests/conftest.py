@@ -36,3 +36,13 @@ def mock_urlopen():
         mock_response.__exit__ = MagicMock(return_value=False)
         return mock_response
     return _create_mock
+
+
+@pytest.fixture
+def empty_work_identity(monkeypatch):
+    """Service scheduling tests do not contact a live book catalog."""
+    from api.services import crawler_service
+    from crawlers.work_identity import WorkIdentity
+    async def identify(query):
+        return WorkIdentity()
+    monkeypatch.setattr(crawler_service,"resolve_work_identity",identify)
