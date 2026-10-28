@@ -92,9 +92,12 @@ Aside Chromium에서 데스크톱 UI와 실제 검색, 정렬, 읽을 책, 기�
 ### 최종 반영 결과
 
 - 서비스: https://book-crawling.vercel.app — 기존 접근 토큰 유지.
-- 웹 운영 배포: `dpl_57uMuYptsbSYUiUr7fQz9fqoM7Lq` (`book-crawling-59jydi73b-cozytks-projects.vercel.app`). 검증한 production 빌드를 promote했다.
-- API 운영 배포: `dpl_BRFyM2fLpRETzghHZBgkSUamHMpz` (`book-crawling-jfrc8w8cg-cozytks-projects.vercel.app`). API 실행 코드 `77c33e0`, 웹 실행 코드 `3e1cc66`.
+- 웹 운영 배포: `dpl_DmkE7PpypJ5EgT5JTNmYSbx7JWE5` (`book-crawling-jk0pegi0b-cozytks-projects.vercel.app`). 검증한 production 빌드를 promote했다.
+- API 운영 배포: `dpl_BRFyM2fLpRETzghHZBgkSUamHMpz` (`book-crawling-jfrc8w8cg-cozytks-projects.vercel.app`). API 실행 코드 `77c33e0`, 웹 실행 코드 `3e1cc66`, 리전 설정 `f73eeb3`.
 - 최종 도메인에서 HTML 200과 실제 앱 제목, `/api/health`의 JSON·Blob 상태, 기록 목록 JSON, 평점 이벤트 4개와 완료 이벤트를 확인했다. 배포 준비 화면의 HTTP 200을 성공으로 세지 않았다. 최종 도메인의 캐시 검색 완료 관측은 0.754초였다.
 - Aside에서 실제 검색·정렬·읽을 책 추가/조회·상세·이전 규칙 경고와 모바일 결과 카드를 확인했다. 모바일 문서 폭과 scrollWidth는 모두 402px이었다. 새 화면은 최종 도메인에서도 확인했다.
 - 코드 PR: https://github.com/cozytk/book-crawling/pull/4 (draft, 미병합). 실행 코드 `3e1cc66`의 GitHub backend-tests·web-build·scope guard와 Vercel preview 검사가 모두 통과했다. 운영 반영은 CLI로 수행했으며 main 자동 배포 설정은 변경하지 않았다.
 - 최종 버전 4 실검색에서도 ISBN 국내 4곳은 상세 식별자 검증을 통과했다. ‘사피엔스’는 7곳의 책 정보를 찾았고 6곳의 평점을 수집했다. 왓챠와 LibraryThing 상세 수집은 blocked로 구분했다. LibraryThing 카드의 점수와 수치는 null로 남겼다.
+
+최종 리전 점검에서 CLI가 웹 하위 폴더의 설정을 반영하지 않아 프록시가 iad1에 놓였던 것을 발견했다. 저장소 루트에도 서울 리전 설정을 추가하고 재배포했다. 배포 메타데이터에서 최종 웹 `regions: [icn1]`을 확인한 뒤 같은 빌드를 다시 promote했다. Git 배포는 web/vercel.json, 루트 CLI 배포는 루트 vercel.json을 사용한다. API도 icn1이다.
+리전 보정 후 최종 도메인에서 앱·JSON 상태/기록·4개 평점 및 완료 이벤트를 다시 확인했다. 캐시 검색 완료 관측은 0.457초였다.
