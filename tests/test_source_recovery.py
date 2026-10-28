@@ -49,6 +49,15 @@ async def test_verified_modern_amazon_card_avoids_detail_request_and_rounded_cou
     assert result.isbn=='9780679731726'
 
 
+async def test_amazon_prefers_a_rated_verified_edition_over_an_unrated_first_result():
+    c=AmazonCrawler()
+    c.expected_identity('The Remains of the Day','Kazuo Ishiguro',strict_isbn=False)
+    html=card(asin='0571154913',stars='',label='')+card()
+    with patch.object(c,'_fetch_with_headers',return_value=html) as fetch:
+        result=await c.crawl('The Remains of the Day')
+    assert result.url.endswith('/0679731725') and result.rating==4.4 and fetch.call_count==1
+
+
 def test_amazon_never_treats_compact_count_as_exact_or_accepts_another_asin_popover():
     c=AmazonCrawler()
     with patch.object(c,'_fetch_with_headers',return_value=card(label='')):

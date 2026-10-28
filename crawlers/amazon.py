@@ -216,7 +216,16 @@ class AmazonCrawler(BaseHttpCrawler):
                 'title':row.select_one('h2').get_text(' ',strip=True) if row.select_one('h2') else '',
                 'author':row.select_one('[data-cy="title-recipe"] .a-row, .a-row.a-size-base.a-color-secondary').get_text(' ',strip=True) if row.select_one('[data-cy="title-recipe"] .a-row, .a-row.a-size-base.a-color-secondary') else ''}
                 for row in candidates[:6]]
-        candidates.sort(key=lambda result: title_score(keyword, result.select_one("h2").get_text(strip=True) if result.select_one("h2") else ""), reverse=True)
+        def rank_card(row):
+            heading=row.select_one('h2')
+            title_match=title_score(keyword,heading.get_text(' ',strip=True) if heading else '')
+            byline=row.select_one('[data-cy="title-recipe"] .a-row:not(.a-size-medium), .a-row.a-size-base.a-color-secondary')
+            author_ok=not self._expected_author or bool(byline and author_matches(self._expected_author,byline.get_text(' ',strip=True)))
+            if not title_match or not author_ok:
+                return (0,0,0,0)
+            score,voters,written,display=self._card_rating(row,row.get('data-asin',''))
+            return (1,score is not None,title_match,voters or written or display or 0)
+        candidates.sort(key=rank_card,reverse=True)
         for result in candidates:
             asin = result.get("data-asin", "")
             if not asin:
