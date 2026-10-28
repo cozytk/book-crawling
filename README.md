@@ -53,6 +53,7 @@ npm audit
 웹과 Python API를 Vercel의 별도 프로젝트로 실행하고, 검색 기록은 비공개 Vercel Blob에 저장합니다. 운영에 GCP·Supabase가 필요하지 않습니다. 기존 외부 자원과 과거 DB 데이터는 변경하거나 자동 이전하지 않습니다.
 
 - 웹: `book-crawling`, 루트 `web/`, 서울 `icn1`.
+- 저장소 루트 `vercel.json`은 CLI 배포, `web/vercel.json`은 Git의 프로젝트 루트 배포에 같은 리전을 지정합니다.
 - API: `book-crawling-api`, `scripts/prepare-vercel-api.py`로 `.deploy/api/`에 생성, 서울 `icn1`.
 - 저장소: API에 연결한 비공개 Blob. UUID별 불변 기록과 검색어별 24시간 캐시를 분리합니다. 기록 화면은 최근 500개를 표시합니다. 읽을 책 목록은 기존처럼 브라우저에 보관합니다.
 - 브라우저는 같은 출처의 `/api/*`를 호출합니다. Next.js가 서버 전용 `API_SERVICE_TOKEN`으로 API에 연결하며, API 주소·키를 클라이언트 번들에 넣지 않습니다. 기존 웹 `ACCESS_TOKEN` 인증을 유지합니다.
