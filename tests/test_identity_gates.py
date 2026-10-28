@@ -87,12 +87,15 @@ def test_kyobo_isbn_in_unrelated_text_cannot_identify_a_product():
         assert crawler.search_by_keyword("9788937460449")[0].endswith("/detail/S1")
 
 
-def test_yes24_tracking_isbn_must_belong_to_the_selected_goods():
+def test_yes24_tracking_query_is_not_isbn_evidence():
     crawler = Yes24Crawler()
-    html = '<a class="gd_name" href="/product/goods/176787" onclick="setGoodsClickExtraCodeHub(\'032\', \'9788937460449\', \'176787\', \'0\',this)">데미안</a>'
-    with patch.object(crawler, "_fetch_html", return_value=html):
+    search = '<a class="gd_name" href="/product/goods/176787" onclick="setGoodsClickExtraCodeHub(\'032\', \'9788937460449\', \'176787\', \'0\',this)">데미안</a>'
+    with patch.object(crawler, "_fetch_html", return_value=search):
+        assert crawler.search_by_keyword("9788937460449") == (None, "")
+    page = '<script type="application/ld+json">' + json.dumps({"@type":"Book", "name":"데미안", "isbn":"9788937460449", "sku":"176787"}) + '</script>'
+    with patch.object(crawler, "_fetch_html", side_effect=[search, page]):
         assert crawler.search_by_keyword("9788937460449")[1] == "데미안"
-    with patch.object(crawler, "_fetch_html", return_value=html.replace("'176787'", "'999999'")):
+    with patch.object(crawler, "_fetch_html", side_effect=[search, page.replace("9788937460449", "9780132350884")]):
         assert crawler.search_by_keyword("9788937460449") == (None, "")
 
 

@@ -5,7 +5,7 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 from .base_http import BaseHttpCrawler
-from .utils import title_score, is_isbn, clean_isbn, structured_isbns, isbn_matches, count_number
+from .utils import title_score, is_isbn, clean_isbn, structured_isbns, isbn_matches, count_number, book_node
 
 
 class Yes24Crawler(BaseHttpCrawler):
@@ -57,13 +57,23 @@ class Yes24Crawler(BaseHttpCrawler):
 
             score = title_score(keyword, text)
             identifiers = structured_isbns(link.parent)
-            # Current Yes24 binds ISBN and goods number in this named hook.
-            # Parse its typed arguments only; arbitrary page text is not proof.
-            click = re.search(r"setGoodsClickExtraCodeHub\(\s*['\"]\d+['\"]\s*,\s*['\"]([0-9Xx -]+)['\"]\s*,\s*['\"](\d+)['\"]", link.get("onclick", ""))
-            product = re.search(r"/goods/(\d+)", href, re.I)
-            if click and product and click.group(2) == product.group(1):
-                identifiers.append(click.group(1))
             if is_isbn(keyword):
+                if not isbn_matches(keyword, identifiers):
+                    # Click tracking repeats the search term, not the product
+                    # ISBN. Verify the real Book metadata on the goods page.
+                    candidate_url = urllib.parse.urljoin(self.base_url, href)
+                    try:
+                        detail = BeautifulSoup(self._fetch_html(candidate_url), "html.parser")
+                        node = book_node(detail, text)
+                        product = re.search(r"/goods/(\d+)", href, re.I)
+                        if node and product and str(node.get("sku", product.group(1))) == product.group(1):
+                            actual_isbn = node.get("isbn")
+                            if actual_isbn:
+                                identifiers.append(str(actual_isbn))
+                            if isbn_matches(keyword, identifiers):
+                                self.book_author = str(node.get("author", "")) or None
+                    except Exception:
+                        pass
                 score = 1.0 if isbn_matches(keyword, identifiers) else 0.0
             if score > best_score:
                 best_score = score

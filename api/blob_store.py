@@ -19,15 +19,15 @@ class BlobStore:
     @staticmethod
     def _cache_path(query):
         key = hashlib.sha256(query.casefold().encode()).hexdigest()
-        return f"v3/cache/{key}.json"
+        return f"v4/cache/{key}.json"
 
     def platform_cached(self, query, platform):
         key = hashlib.sha256(query.casefold().encode()).hexdigest()
-        return self._read(f"v3/platforms/{platform}/{key}.json")
+        return self._read(f"v4/platforms/{platform}/{key}.json")
 
     def cache_platform(self, query, platform, value):
         key = hashlib.sha256(query.casefold().encode()).hexdigest()
-        self._write(f"v3/platforms/{platform}/{key}.json", value, overwrite=True)
+        self._write(f"v4/platforms/{platform}/{key}.json", value, overwrite=True)
 
     def _read(self, path):
         try:
@@ -44,7 +44,7 @@ class BlobStore:
     def save(self, query, results, platforms=None):
         from api.db import summarize
         now = datetime.now(timezone.utc)
-        search = {"schema_version": 3, "id": str(uuid4()), "query": query, "created_at": now.isoformat(),
+        search = {"schema_version": 4, "id": str(uuid4()), "query": query, "created_at": now.isoformat(),
                   "requested_platforms": platforms or [], **summarize(results)}
         payload = {"search": search, "ratings": results}
         # Alphabetical listing puts the newest immutable records first.
@@ -53,7 +53,7 @@ class BlobStore:
         # The canonical record commits first. Independent indexes then write in
         # parallel, so a cache hit can always retrieve the referenced record.
         with ThreadPoolExecutor(max_workers=2) as pool:
-            history = pool.submit(self._write, f'v3/history/{reverse_time:016d}-{search["id"]}.json', payload)
+            history = pool.submit(self._write, f'v4/history/{reverse_time:016d}-{search["id"]}.json', payload)
             cache = pool.submit(self._write, self._cache_path(query), payload, True)
             history.result()
             try:
@@ -72,7 +72,7 @@ class BlobStore:
         return None
 
     def history(self, sort_by, order, limit, offset, platform, sort_platform, with_count):
-        items = list(islice(blob.query_blobs(prefix="v3/history/", page_size=500), self.HISTORY_LIMIT))
+        items = list(islice(blob.query_blobs(prefix="v4/history/", page_size=500), self.HISTORY_LIMIT))
         with ThreadPoolExecutor(max_workers=12) as pool:
             records = [r for r in pool.map(self._read, [i.pathname for i in items]) if r]
         target = platform or (sort_platform if sort_by == "platform_rating" else None)

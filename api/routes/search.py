@@ -44,7 +44,7 @@ def cached_for(client, query, platforms=None):
         return None
     selected = set(platforms if platforms is not None else CRAWLERS)
     found = {r["platform"] for r in cached["ratings"]}
-    if cached["search"].get("schema_version") != 3 or not selected.issubset(found):
+    if cached["search"].get("schema_version") != 4 or not selected.issubset(found):
         return None
     if any(r.get("normalized_rating") is None or r.get("review_count") is None for r in cached["ratings"] if r["platform"] in selected):
         return None
@@ -118,7 +118,7 @@ async def get_search(search_id: UUID):
         raise HTTPException(status_code=503, detail="데이터베이스 연결 실패")
     if saved is None:
         raise HTTPException(status_code=404, detail="검색 결과를 찾을 수 없습니다")
-    if saved["search"].get("schema_version") != 3:
+    if saved["search"].get("schema_version") != 4:
         saved["search"]["legacy_validation"] = True
     return {"source": "cache", **saved}
 

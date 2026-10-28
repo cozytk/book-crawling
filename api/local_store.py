@@ -29,7 +29,7 @@ class LocalStore:
 
     def save(self, query, results, platforms=None):
         from api.db import summarize
-        search = {"schema_version": 3, "id": str(uuid4()), "query": query, "created_at": datetime.now(timezone.utc).isoformat(), **summarize(results)}
+        search = {"schema_version": 4, "id": str(uuid4()), "query": query, "created_at": datetime.now(timezone.utc).isoformat(), **summarize(results)}
         if platforms is not None:
             search["requested_platforms"] = platforms
         payload = {"search": search, "ratings": results}
